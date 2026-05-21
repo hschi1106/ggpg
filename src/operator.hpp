@@ -209,6 +209,30 @@ struct Div : Fun {
 
 };
 
+struct AnalyticQuotient : Fun {
+
+  Op * clone() override {
+    return new AnalyticQuotient();
+  }
+
+  int arity() override {
+    return 2;
+  }
+
+  string sym() override {
+    return "analytic_quotient";
+  }
+
+  string human_repr(vector<string> & args) override {
+    return "(" + args[0] + " / sqrt(1 + (" + args[1] + ")**2))";
+  }
+
+  Vec apply(Mat & X) override {
+    return X.col(0) / (1.0 + X.col(1).square()).sqrt();
+  }
+
+};
+
 struct Sin : Fun {
 
   Op * clone() override {

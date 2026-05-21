@@ -33,7 +33,7 @@ namespace g {
 
   // ALL operators
   vector<Op*> all_operators = {
-    new Add(), new Sub(), new Neg(), new Mul(), new Div(), new Inv(), 
+    new Add(), new Sub(), new Neg(), new Mul(), new Div(), new AnalyticQuotient(), new Inv(),
     new Square(), new Sqrt(), new Cube(),
     new Sin(), new Cos(), 
     new Log(),
@@ -442,7 +442,7 @@ namespace g {
     parser.set_optional<int>("d", "depth", 4, "Maximum depth that the trees can have");
     // problem & representation
     parser.set_optional<string>("ff", "fitness_function", "ac", "Fitness function");
-    parser.set_optional<string>("fset", "function_set", "+,-,*,/,sin,cos,log", "Function set");
+    parser.set_optional<string>("fset", "function_set", "+,-,*,analytic_quotient,sin,cos,log", "Function set");
     parser.set_optional<string>("fset_probs", "function_set_probabilities", "auto", "Probabilities of sampling each element of the function set (same order as fset)");
     parser.set_optional<string>("tset", "terminal_set", "auto", "Terminal set");
     parser.set_optional<string>("tset_probs", "terminal_set_probabilities", "auto", "Probabilities of sampling each element of the function set (same order as tset)");

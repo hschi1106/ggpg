@@ -18,6 +18,26 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "experiments" / "paper_reproduction_config.yaml"
+FUNCTION_SET_SYMBOLS = {
+    "add": "+",
+    "+": "+",
+    "sub": "-",
+    "subtract": "-",
+    "-": "-",
+    "mul": "*",
+    "multiply": "*",
+    "*": "*",
+    "div": "/",
+    "division": "/",
+    "protected_division": "/",
+    "/": "/",
+    "analytic_quotient": "analytic_quotient",
+    "aq": "analytic_quotient",
+    "sin": "sin",
+    "cos": "cos",
+    "log": "log",
+    "sqrt": "sqrt",
+}
 FINAL_COLUMNS = [
     "run_id",
     "dataset",
@@ -67,6 +87,21 @@ GENERATION_COLUMNS = [
 def load_config(path: Path = CONFIG_PATH) -> dict:
     with path.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def cli_function_set(config: dict | None = None) -> str:
+    config = config if config is not None else load_config()
+    configured = config.get("function_set", ["add", "sub", "mul", "analytic_quotient"])
+    if isinstance(configured, str):
+        return configured
+    symbols = []
+    for name in configured:
+        key = str(name).strip()
+        try:
+            symbols.append(FUNCTION_SET_SYMBOLS[key])
+        except KeyError as exc:
+            raise ValueError(f"Unsupported function_set entry in paper config: {name}") from exc
+    return ",".join(symbols)
 
 
 def slugify(name: str) -> str:
@@ -260,14 +295,16 @@ def run_gpg_cli(
     gpu_batch_size: int,
     disable_ims: bool = True,
     ims_g: int | None = None,
+    function_set: str | None = None,
 ) -> dict:
     train_csv = write_gpg_training_csv(dataset, seed)
+    function_set = function_set or cli_function_set()
     cmd = [
         str(gpg_binary_for_backend(backend)),
         "-train", str(train_csv),
         "-backend", backend,
         "-ff", "mse",
-        "-fset", "+,-,*,/",
+        "-fset", function_set,
         "-d", str(tree_height),
         "-pop", str(population_size),
         "-t", str(time_limit_seconds),

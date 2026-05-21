@@ -193,7 +193,7 @@ Errors are reported as normalized MSE on the paper scale \(100 \times \mathrm{{M
 
 We also rerun the selected Paper-G rows shown in the earlier comparison table.
 Those local reruns use \texttt{{cpu\_original}}, \(l=31\), \(\mathrm{{npop}}=1000\), seeds 0--{selected_seeds - 1}, and a {selected_time_limit}s budget, yielding {selected_runs} completed runs.
-The original paper values remain a reference scale rather than a claim of protocol-equivalent reproduction: we did not rerun the full 30-repetition paper matrix, and the current scripted function set uses \texttt{{+,-,*,/}} rather than the paper's analytic quotient configuration.
+The original paper values remain a reference scale rather than a claim of protocol-equivalent reproduction: we did not rerun the full 30-repetition paper matrix, but the experiment harness now maps the paper configuration to \texttt{{+,-,*,analytic\_quotient}} for local GP-GOMEA runs.
 
 \section{{Results}}
 
@@ -253,7 +253,7 @@ Batch & Runs & Med. \(\Delta_b\) & Med. \(|\Delta_b|\) & Ratio & \(R_b\) \\
 
 Table~\ref{{tab:paper-g-rerun}} compares the original paper's fixed-population \(G\), \(l=31\), \(\mathrm{{npop}}=1000\) test results with our selected local rerun and the best short-budget GPU-batch result from the bounded ablation.
 The local rerun is weaker than the paper reference on Airfoil, Dow chemical, and Yacht hydrodynamics, and closer on Wine white.
-This is consistent with the reduced budget, fewer repetitions, and remaining function-set mismatch.
+This is consistent with the reduced budget and fewer repetitions; future full-matrix runs should regenerate this table after the analytic-quotient harness update.
 
 \begin{{table*}}[t]
 \centering
@@ -285,7 +285,7 @@ Publication-quality conclusions about symbolic-regression accuracy require the f
 The full reference-paper experiment matrix was not rerun.
 The bounded GPU study uses four datasets, three seeds, population 128, and short runs.
 The selected Paper-G rerun uses only four datasets and three seeds, with a shorter budget than the reference paper's 30-repetition, 1000s protocol.
-The current scripted function set also differs from the paper's analytic quotient setup.
+The current harness uses the paper-style analytic quotient function set, but pre-existing local result CSVs should be regenerated before making final numerical claims.
 Accordingly, this report supports claims about implementation feasibility, throughput scaling, and batch-induced search distortion, but not final benchmark superiority over the published GP-GOMEA results.
 
 \section{{Conclusion}}
