@@ -1,0 +1,72 @@
+paper_path: paper/Improving_Model_based_GP_for_SR.pdf
+
+function_set:
+  - add
+  - sub
+  - mul
+  - analytic_quotient
+
+terminal_set:
+  include_features: true
+  include_erc: true
+
+erc_bounds: "min_x_to_max_x"
+
+train_validation_test_split:
+  train: 0.50
+  validation: 0.25
+  test: 0.25
+
+repetitions: 30
+
+tree_heights:
+  - 3
+  - 4
+  - 5
+
+max_nodes:
+  h3: 15
+  h4: 31
+  h5: 63
+
+fixed_population_size: 1000
+
+ims_g_values:
+  - 4
+  - 6
+  - 8
+
+time_limit_seconds: 1000
+
+datasets:
+  - Airfoil
+  - Boston housing
+  - Concrete compressive strength
+  - Dow chemical
+  - Energy cooling
+  - Energy heating
+  - Tower
+  - Wine red
+  - Wine white
+  - Yacht hydrodynamics
+
+fast_development_benchmark:
+  datasets:
+    - Yacht hydrodynamics
+    - Airfoil
+    - Wine white
+    - Dow chemical
+  tree_height: 4
+  max_nodes: 31
+  population_size: 1000
+  time_limit_seconds: 300
+  seeds: 10
+  backends:
+    - cpu_original
+    - gpu_exact_gom
+    - gpu_batch_gom
+  gpu_batch_sizes:
+    - 1
+    - 8
+    - 32
+    - 128

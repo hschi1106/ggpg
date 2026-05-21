@@ -1,0 +1,5 @@
+#!/bin/bash
+
+make clean
+make release
+./build/release/gpg -train dataset/diabetes_train.csv -pop 40 -g 10 -verbose
