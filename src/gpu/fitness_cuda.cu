@@ -70,8 +70,7 @@ __device__ double eval_program_single_sample(
       opcode == GpuOpCode::ADD ||
       opcode == GpuOpCode::SUB ||
       opcode == GpuOpCode::MUL ||
-      opcode == GpuOpCode::DIV ||
-      opcode == GpuOpCode::AQ
+      opcode == GpuOpCode::DIV
     ) {
       if (sp < 2) {
         return PENALTY;
@@ -86,8 +85,6 @@ __device__ double eval_program_single_sample(
         r = a - b;
       } else if (opcode == GpuOpCode::MUL) {
         r = a * b;
-      } else if (opcode == GpuOpCode::AQ) {
-        r = a / sqrt(1.0 + b * b);
       } else {
         if (b == 0.0) {
           return PENALTY;
@@ -105,7 +102,6 @@ __device__ double eval_program_single_sample(
     if (
       opcode == GpuOpCode::SIN ||
       opcode == GpuOpCode::COS ||
-      opcode == GpuOpCode::EXP ||
       opcode == GpuOpCode::LOG ||
       opcode == GpuOpCode::SQRT ||
       opcode == GpuOpCode::NEG ||
@@ -123,8 +119,6 @@ __device__ double eval_program_single_sample(
         r = sin(a);
       } else if (opcode == GpuOpCode::COS) {
         r = cos(a);
-      } else if (opcode == GpuOpCode::EXP) {
-        r = exp(a > 40.0 ? 40.0 : a);
       } else if (opcode == GpuOpCode::LOG) {
         return PENALTY;
       } else if (opcode == GpuOpCode::SQRT) {

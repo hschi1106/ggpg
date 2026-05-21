@@ -193,7 +193,7 @@ Errors are reported as normalized MSE on the paper scale \(100 \times \mathrm{{M
 
 We also rerun the selected Paper-G rows shown in the earlier comparison table.
 Those local reruns use \texttt{{cpu\_original}}, \(l=31\), \(\mathrm{{npop}}=1000\), seeds 0--{selected_seeds - 1}, and a {selected_time_limit}s budget, yielding {selected_runs} completed runs.
-The original paper values remain a reference scale rather than a claim of protocol-equivalent reproduction: we did not rerun the full 30-repetition paper matrix, but the experiment harness now maps the paper configuration to \texttt{{+,-,*,analytic\_quotient}} for local GP-GOMEA runs.
+The original paper values remain a reference scale rather than a claim of protocol-equivalent reproduction: we did not rerun the full 30-repetition paper matrix, and the local harness intentionally uses the upstream \texttt{{gpg}} function names and semantics.
 
 \section{{Results}}
 
@@ -253,7 +253,7 @@ Batch & Runs & Med. \(\Delta_b\) & Med. \(|\Delta_b|\) & Ratio & \(R_b\) \\
 
 Table~\ref{{tab:paper-g-rerun}} compares the original paper's fixed-population \(G\), \(l=31\), \(\mathrm{{npop}}=1000\) test results with our selected local rerun and the best short-budget GPU-batch result from the bounded ablation.
 The local rerun is weaker than the paper reference on Airfoil, Dow chemical, and Yacht hydrodynamics, and closer on Wine white.
-This is consistent with the reduced budget and fewer repetitions; future full-matrix runs should regenerate this table after the analytic-quotient harness update.
+This is consistent with the reduced budget, fewer repetitions, and the fact that these local runs follow the upstream \texttt{{gpg}} operator set rather than the paper's analytic-quotient setup.
 
 \begin{{table*}}[t]
 \centering
@@ -278,14 +278,14 @@ Batching changes when successful edits become visible, so it can either help by 
 
 For practical use, batch size should therefore be treated as a search hyperparameter.
 The bounded study suggests that batch sizes 64 and 128 are attractive for throughput, while intermediate sizes may sometimes provide a better quality--speed compromise.
-Publication-quality conclusions about symbolic-regression accuracy require the full reference matrix and exact alignment with the paper's operator semantics.
+Publication-quality conclusions about symbolic-regression accuracy require the full reference matrix and an explicit decision about whether to compare against upstream \texttt{{gpg}} semantics or paper-specific operator semantics.
 
 \section{{Limitations}}
 
 The full reference-paper experiment matrix was not rerun.
 The bounded GPU study uses four datasets, three seeds, population 128, and short runs.
 The selected Paper-G rerun uses only four datasets and three seeds, with a shorter budget than the reference paper's 30-repetition, 1000s protocol.
-The current harness uses the paper-style analytic quotient function set, but pre-existing local result CSVs should be regenerated before making final numerical claims.
+The current harness matches the upstream \texttt{{gpg}} function names and operator semantics; it does not add analytic quotient as a local-only operator.
 Accordingly, this report supports claims about implementation feasibility, throughput scaling, and batch-induced search distortion, but not final benchmark superiority over the published GP-GOMEA results.
 
 \section{{Conclusion}}

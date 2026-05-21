@@ -64,7 +64,7 @@ print("Test\t\tR2: {}\t\tMSE: {}".format(
 ## Differences w.r.t. previous version
 This version has some differences compared to the code in the [previous repo](https://github.com/marcovirgolin/GP-GOMEA).
 Here's a list:
-- Division remains unprotected by default when `/` is selected, but paper-style experiments can use analytic quotient via `analytic_quotient`
+- Protected operators are not used here (expressions that evaluate to NaN for some training points are assigned a worst-case fitness `INF`)
 - Functions/variables/constants can be sampled with custom probabilities (by default, uniform with binary operators twice as likely as unary operators)
 - Tournament selection can be used to speed up convergence within GOM.
 - Models returned from the C++ code are simplified and (optionally) fine-tuned in Python

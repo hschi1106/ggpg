@@ -43,9 +43,6 @@ inline GpuToken op_to_gpu_token(Op * op) {
   if (sym == "/") {
     return GpuToken{static_cast<int>(GpuOpCode::DIV), -1, 0.0};
   }
-  if (sym == "analytic_quotient") {
-    return GpuToken{static_cast<int>(GpuOpCode::AQ), -1, 0.0};
-  }
   if (sym == "¬") {
     return GpuToken{static_cast<int>(GpuOpCode::NEG), -1, 0.0};
   }
@@ -70,10 +67,6 @@ inline GpuToken op_to_gpu_token(Op * op) {
   if (sym == "sqrt") {
     return GpuToken{static_cast<int>(GpuOpCode::SQRT), -1, 0.0};
   }
-  if (sym == "exp") {
-    return GpuToken{static_cast<int>(GpuOpCode::EXP), -1, 0.0};
-  }
-
   throw std::runtime_error("Unsupported operator for GPU serialization: " + sym);
 }
 

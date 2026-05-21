@@ -19,24 +19,18 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "experiments" / "paper_reproduction_config.yaml"
 FUNCTION_SET_SYMBOLS = {
-    "add": "+",
     "+": "+",
-    "sub": "-",
-    "subtract": "-",
     "-": "-",
-    "mul": "*",
-    "multiply": "*",
+    "¬": "¬",
     "*": "*",
-    "div": "/",
-    "division": "/",
-    "protected_division": "/",
     "/": "/",
-    "analytic_quotient": "analytic_quotient",
-    "aq": "analytic_quotient",
+    "1/": "1/",
+    "**2": "**2",
+    "sqrt": "sqrt",
+    "**3": "**3",
     "sin": "sin",
     "cos": "cos",
     "log": "log",
-    "sqrt": "sqrt",
 }
 FINAL_COLUMNS = [
     "run_id",
@@ -91,7 +85,7 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
 
 def cli_function_set(config: dict | None = None) -> str:
     config = config if config is not None else load_config()
-    configured = config.get("function_set", ["add", "sub", "mul", "analytic_quotient"])
+    configured = config.get("function_set", ["+", "-", "*", "/", "sin", "cos", "log"])
     if isinstance(configured, str):
         return configured
     symbols = []
@@ -100,7 +94,7 @@ def cli_function_set(config: dict | None = None) -> str:
         try:
             symbols.append(FUNCTION_SET_SYMBOLS[key])
         except KeyError as exc:
-            raise ValueError(f"Unsupported function_set entry in paper config: {name}") from exc
+            raise ValueError(f"Unsupported upstream gpg function_set symbol in paper config: {name}") from exc
     return ",".join(symbols)
 
 

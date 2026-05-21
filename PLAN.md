@@ -193,10 +193,8 @@ enum class GpuOpCode : int {
     SUB = 2,
     MUL = 3,
     DIV = 4,
-    AQ  = 5,
     SIN = 6,
     COS = 7,
-    EXP = 8,
     LOG = 9,
     SQRT = 10,
     VAR = 100,
@@ -294,7 +292,7 @@ Minimum required operators:
 +
 -
 *
-analytic quotient or protected division, depending on existing CPU semantics
+division semantics matching the upstream CPU implementation
 variables
 constants / ERC
 ```
@@ -770,10 +768,13 @@ Include the paper-style settings:
 
 ```yaml
 function_set:
-  - add
-  - sub
-  - mul
-  - analytic_quotient
+  - "+"
+  - "-"
+  - "*"
+  - "/"
+  - sin
+  - cos
+  - log
 
 terminal_set:
   include_features: true
@@ -1136,7 +1137,7 @@ x0
 x0 + x1
 (x0 + 2.0) * x1
 sin(x0)
-x0 / sqrt(1 + x1^2) if analytic quotient is used
+x0 / x1
 ```
 
 Check postfix token order.
@@ -1296,7 +1297,7 @@ The most likely correctness bug is CPU/GPU mismatch in operator semantics.
 
 Pay special attention to:
 
-- analytic quotient vs protected division
+- division and invalid-value handling
 - exponent overflow
 - NaN / Inf handling
 - constant precision

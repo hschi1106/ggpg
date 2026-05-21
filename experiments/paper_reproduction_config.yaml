@@ -1,10 +1,13 @@
 paper_path: paper/Improving_Model_based_GP_for_SR.pdf
 
 function_set:
-  - add
-  - sub
-  - mul
-  - analytic_quotient
+  - "+"
+  - "-"
+  - "*"
+  - "/"
+  - sin
+  - cos
+  - log
 
 terminal_set:
   include_features: true
