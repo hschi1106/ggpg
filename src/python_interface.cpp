@@ -1,6 +1,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/eigen.h>
 #include <iostream>
+#include <memory>
+#include <vector>
 
 #include "util.hpp"
 #include "myeig.hpp"
@@ -10,20 +12,47 @@
 namespace py = pybind11; 
 using namespace std;
 
+namespace {
+
+struct RunStateGuard {
+  ~RunStateGuard() {
+    try {
+      g::reset();
+    } catch (...) {
+    }
+  }
+};
+
+bool has_lib_option(const vector<string> & opts) {
+  for (const string & opt : opts) {
+    if (opt == "-lib" || opt == "--call_as_lib") {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
 py::list evolve(string options, myeig::Mat &X, myeig::Vec &y) {
   // 1. SETUP
+  RunStateGuard run_state_guard;
   auto opts = split_string(options, " ");
-  int argc = opts.size()+1;
-  char * argv[argc];
-  string title = "gpg";
-  argv[0] = (char*) title.c_str();
-  for (int i = 1; i < argc; i++) {
-    argv[i] = (char*) opts[i-1].c_str();
+  if (!has_lib_option(opts)) {
+    opts.push_back("-lib");
   }
-  g::read_options(argc, argv);
+
+  vector<char*> argv;
+  argv.reserve(opts.size() + 1);
+  string title = "gpg";
+  argv.push_back((char*) title.c_str());
+  for (string & opt : opts) {
+    argv.push_back((char*) opt.c_str());
+  }
+  g::read_options((int) argv.size(), argv.data());
 
   // initialize evolution handler 
-  IMS * ims = new IMS();
+  std::unique_ptr<IMS> ims = std::make_unique<IMS>();
 
   // set training set
   g::fit_func->set_Xy(X, y);
@@ -51,12 +80,32 @@ py::list evolve(string options, myeig::Mat &X, myeig::Vec &y) {
   }
 
   // 4. CLEANUP
-  delete ims;
+  ims.reset();
 
   return models;
+}
+
+bool cuda_enabled() {
+#ifdef GPG_USE_CUDA
+  return true;
+#else
+  return false;
+#endif
+}
+
+py::list available_backends() {
+  py::list result;
+  result.append("cpu_original");
+#ifdef GPG_USE_CUDA
+  result.append("gpu_exact_gom");
+  result.append("gpu_batch_gom");
+#endif
+  return result;
 }
 
 PYBIND11_MODULE(_pb_gpg, m) {
   m.doc() = "pybind11-based interface for gpg"; // optional module docstring
   m.def("evolve", &evolve, "Runs gpg evolution in C++");
+  m.def("cuda_enabled", &cuda_enabled, "Returns true when the extension was built with CUDA support");
+  m.def("available_backends", &available_backends, "Returns execution backends available in this extension build");
 }

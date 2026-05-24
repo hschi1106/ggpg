@@ -11,14 +11,54 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.realpath(__file__))), 'pygpg'))
 
 # load cpp interface
-import _pb_gpg
+try:
+  from . import _pb_gpg
+except ImportError:
+  import _pb_gpg
+
+_VALID_BACKENDS = {"cpu_original", "gpu_exact_gom", "gpu_batch_gom"}
+_GPU_BACKENDS = {"gpu_exact_gom", "gpu_batch_gom"}
 
 class GPGRegressor(BaseEstimator, RegressorMixin):
 
-  def __init__(self, **kwargs):
+  def __init__(
+    self,
+    backend="cpu_original",
+    gpu_batch_size=32,
+    gpu_check_correctness=False,
+    fset=None,
+    **kwargs
+  ):
+    self.backend = backend
+    self.gpu_batch_size = gpu_batch_size
+    self.gpu_check_correctness = gpu_check_correctness
+    self.fset = fset
     # store parameters internally
     for k in kwargs:
       setattr(self, k, kwargs[k])
+
+  @staticmethod
+  def cuda_enabled():
+    return bool(_pb_gpg.cuda_enabled())
+
+  @staticmethod
+  def available_backends():
+    return list(_pb_gpg.available_backends())
+
+  def _validate_backend_options(self):
+    if self.backend not in _VALID_BACKENDS:
+      raise ValueError(
+        f"Unknown backend '{self.backend}'. Expected one of {sorted(_VALID_BACKENDS)}."
+      )
+
+    if self.backend in _GPU_BACKENDS and not self.cuda_enabled():
+      raise RuntimeError(
+        f"Backend '{self.backend}' requires a CUDA-enabled _pb_gpg extension. "
+        "Rebuild with GPG_USE_CUDA=ON or use backend='cpu_original'."
+      )
+
+    if int(self.gpu_batch_size) < 1:
+      raise ValueError("gpu_batch_size must be >= 1")
 
   #def __del__(self):
   #  if hasattr(self, "_gpg_cpp"):
@@ -29,8 +69,10 @@ class GPGRegressor(BaseEstimator, RegressorMixin):
     kwargs = self.get_params()
     s = ""
     for k in kwargs:
+      if k.startswith("_") or kwargs[k] is None:
+        continue
       # skip python-only params
-      if k in ["finetune", "model", "finetune_max_evals"]:
+      if k in ["finetune", "model", "imputer", "finetune_max_evals"]:
         continue
 
       # handle bool flags for c++ 
@@ -68,6 +110,8 @@ class GPGRegressor(BaseEstimator, RegressorMixin):
 
 
   def fit(self, X, y):
+    self._validate_backend_options()
+
     # setup cpp interface
     cpp_options = self._create_cpp_option_string()
     

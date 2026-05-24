@@ -100,6 +100,7 @@ namespace g {
   int random_state = -1;
   bool verbose = true;
   bool _call_as_lib = false;
+  std::streambuf * cout_rdbuf = std::cout.rdbuf();
 
   // Functions
   void set_fit_func(string fit_func_name) { 
@@ -410,6 +411,7 @@ namespace g {
       delete gpu_ctx;
       gpu_ctx = NULL;
     }
+    std::cout.rdbuf(cout_rdbuf);
     execution_backend = ExecutionBackend::CPU_ORIGINAL;
     ims_sub_generations = 4;
     gpu_batch_size = 32;
@@ -482,6 +484,8 @@ namespace g {
     verbose = parser.get<bool>("verbose");
     if (!verbose) {
       cout.rdbuf(NULL);
+    } else {
+      cout.rdbuf(cout_rdbuf);
     }
 
     // random_state
