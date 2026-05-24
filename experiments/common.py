@@ -24,6 +24,10 @@ FUNCTION_SET_SYMBOLS = {
     "¬": "¬",
     "*": "*",
     "/": "/",
+    "aq": "aq",
+    "AQ": "aq",
+    "analytic_quotient": "aq",
+    "analytic-quotient": "aq",
     "1/": "1/",
     "**2": "**2",
     "sqrt": "sqrt",
@@ -85,7 +89,7 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
 
 def cli_function_set(config: dict | None = None) -> str:
     config = config if config is not None else load_config()
-    configured = config.get("function_set", ["+", "-", "*", "/", "sin", "cos", "log"])
+    configured = config.get("function_set", ["+", "-", "*", "aq"])
     if isinstance(configured, str):
         return configured
     symbols = []

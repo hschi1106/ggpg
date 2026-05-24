@@ -6,6 +6,7 @@ enum class GpuOpCode : int {
   SUB = 2,
   MUL = 3,
   DIV = 4,
+  AQ = 5,
   SIN = 6,
   COS = 7,
   LOG = 9,

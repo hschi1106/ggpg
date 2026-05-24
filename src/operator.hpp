@@ -1,6 +1,8 @@
 #ifndef OPERATOR_H
 #define OPERATOR_H
 
+#include <cmath>
+
 #include "myeig.hpp"
 #include "util.hpp"
 #include "rng.hpp"
@@ -205,6 +207,31 @@ struct Div : Fun {
     Vec denom = X.col(1);
     replace(denom, 0, NAN);
     return X.col(0)/denom;
+  }
+
+};
+
+struct AnalyticQuotient : Fun {
+
+  Op * clone() override {
+    return new AnalyticQuotient();
+  }
+
+  int arity() override {
+    return 2;
+  }
+
+  string sym() override {
+    return "aq";
+  }
+
+  Vec apply(Mat & X) override {
+    Vec denom = (1.0f + X.col(1).square()).sqrt();
+    return X.col(0) / denom;
+  }
+
+  string human_repr(vector<string> & args) override {
+    return "(" + args[0] + " / sqrt(1.0 + (" + args[1] + ")**2))";
   }
 
 };

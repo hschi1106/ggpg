@@ -33,7 +33,7 @@ namespace g {
 
   // ALL operators
   vector<Op*> all_operators = {
-    new Add(), new Sub(), new Neg(), new Mul(), new Div(), new Inv(),
+    new Add(), new Sub(), new Neg(), new Mul(), new Div(), new AnalyticQuotient(), new Inv(),
     new Square(), new Sqrt(), new Cube(),
     new Sin(), new Cos(), 
     new Log(),
@@ -198,10 +198,18 @@ namespace g {
     gpu_ctx->fitness_kind = current_gpu_fitness_kind();
   }
 
+  string canonical_function_symbol(string sym) {
+    if (sym == "AQ" || sym == "Aq" || sym == "analytic_quotient" || sym == "analytic-quotient") {
+      return "aq";
+    }
+    return sym;
+  }
+
   void set_functions(string setting) {
     assert(functions.empty());
     vector<string> desired_operator_symbs = split_string(setting);
     for (string sym : desired_operator_symbs) {
+      sym = canonical_function_symbol(sym);
       bool found = false;
       for (Op * op : all_operators) {
         if (op->sym() == sym) {

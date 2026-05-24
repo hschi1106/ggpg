@@ -7,6 +7,12 @@ This fork keeps `cpu_original` as the upstream GP-GOMEA baseline and adds two CU
 
 CUDA kernels never consume `Node*`, `Op*`, or tree pointers. Expressions are serialized on CPU into postfix `GpuToken` programs and copied to fixed-stride GPU buffers.
 
+The upstream division operator `/` is preserved as ordinary division. For paper-comparable experiments that use analytic quotient, select the explicit `aq` primitive:
+
+```bash
+-fset +,-,*,aq
+```
+
 ## Build
 
 CPU-only:
@@ -52,7 +58,7 @@ Batched GPU GOM:
 Optional correctness sampling:
 
 ```bash
-./build/cuda/gpg -train dataset/diabetes_train.csv -ff mse -fset +,-,*,/ -backend gpu_exact_gom -gpu_check_correctness -disable_ims -g 2 -verbose
+./build/cuda/gpg -train dataset/diabetes_train.csv -ff mse -fset +,-,*,aq -backend gpu_exact_gom -gpu_check_correctness -disable_ims -g 2 -verbose
 ```
 
 GPU backends currently support `-ff mse` and `-ff mae`. Use `cpu_original` for `ac`.
@@ -64,6 +70,8 @@ The editable paper-style settings live in:
 ```text
 experiments/paper_reproduction_config.yaml
 ```
+
+The default paper-style function set is `+,-,*,aq`, where `aq(a,b)=a/sqrt(1+b^2)`.
 
 Prepare datasets:
 

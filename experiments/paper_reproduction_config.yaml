@@ -4,10 +4,7 @@ function_set:
   - "+"
   - "-"
   - "*"
-  - "/"
-  - sin
-  - cos
-  - log
+  - aq
 
 terminal_set:
   include_features: true

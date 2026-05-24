@@ -6,6 +6,7 @@ const char * gpu_opcode_name(int opcode) {
     case GpuOpCode::SUB: return "SUB";
     case GpuOpCode::MUL: return "MUL";
     case GpuOpCode::DIV: return "DIV";
+    case GpuOpCode::AQ: return "AQ";
     case GpuOpCode::SIN: return "SIN";
     case GpuOpCode::COS: return "COS";
     case GpuOpCode::LOG: return "LOG";

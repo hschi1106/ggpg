@@ -253,7 +253,8 @@ Batch & Runs & Med. \(\Delta_b\) & Med. \(|\Delta_b|\) & Ratio & \(R_b\) \\
 
 Table~\ref{{tab:paper-g-rerun}} compares the original paper's fixed-population \(G\), \(l=31\), \(\mathrm{{npop}}=1000\) test results with our selected local rerun and the best short-budget GPU-batch result from the bounded ablation.
 The local rerun is weaker than the paper reference on Airfoil, Dow chemical, and Yacht hydrodynamics, and closer on Wine white.
-This is consistent with the reduced budget, fewer repetitions, and the fact that these local runs follow the upstream \texttt{{gpg}} operator set rather than the paper's analytic-quotient setup.
+This is consistent with the reduced budget and fewer repetitions.
+For paper-comparable runs, the harness uses an explicit analytic-quotient primitive \texttt{{aq}} rather than overloading upstream division.
 
 \begin{{table*}}[t]
 \centering
@@ -285,8 +286,8 @@ Publication-quality conclusions about symbolic-regression accuracy require the f
 The full reference-paper experiment matrix was not rerun.
 The bounded GPU study uses four datasets, three seeds, population 128, and short runs.
 The selected Paper-G rerun uses only four datasets and three seeds, with a shorter budget than the reference paper's 30-repetition, 1000s protocol.
-The current harness matches the upstream \texttt{{gpg}} function names and operator semantics; it does not add analytic quotient as a local-only operator.
-Accordingly, this report supports claims about implementation feasibility, throughput scaling, and batch-induced search distortion, but not final benchmark superiority over the published GP-GOMEA results.
+The current harness preserves upstream \texttt{{gpg}} division and adds analytic quotient as an explicit \texttt{{aq}} primitive for paper-style runs.
+Accordingly, this report supports claims about implementation feasibility, throughput scaling, and batch-induced search distortion, while full benchmark superiority claims still require rerunning the complete paper matrix.
 
 \section{{Conclusion}}
 

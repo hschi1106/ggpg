@@ -37,6 +37,35 @@ __device__ double atomic_add_double(double * address, double val) {
 #endif
 }
 
+cudaStream_t eval_stream(GpuEvalContext & ctx) {
+  return reinterpret_cast<cudaStream_t>(ctx.cuda_stream);
+}
+
+void ensure_stream(GpuEvalContext & ctx) {
+  if (!ctx.cuda_stream) {
+    cudaStream_t stream = nullptr;
+    CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    ctx.cuda_stream = stream;
+  }
+}
+
+void ensure_single_host_buffers(GpuEvalContext & ctx) {
+  if (!ctx.h_single_length) {
+    CUDA_CHECK(cudaMallocHost((void **) &ctx.h_single_length, sizeof(int)));
+    *ctx.h_single_length = 0;
+  }
+  if (!ctx.h_single_sum) {
+    CUDA_CHECK(cudaMallocHost((void **) &ctx.h_single_sum, sizeof(double)));
+    *ctx.h_single_sum = 0.0;
+  }
+}
+
+int sample_block_count(int N) {
+  constexpr int threads = 256;
+  int blocks_y = (N + threads - 1) / threads;
+  return std::max(1, std::min(blocks_y, 64));
+}
+
 __device__ double eval_program_single_sample(
   const GpuToken * prog,
   int len,
@@ -70,7 +99,8 @@ __device__ double eval_program_single_sample(
       opcode == GpuOpCode::ADD ||
       opcode == GpuOpCode::SUB ||
       opcode == GpuOpCode::MUL ||
-      opcode == GpuOpCode::DIV
+      opcode == GpuOpCode::DIV ||
+      opcode == GpuOpCode::AQ
     ) {
       if (sp < 2) {
         return PENALTY;
@@ -85,11 +115,13 @@ __device__ double eval_program_single_sample(
         r = a - b;
       } else if (opcode == GpuOpCode::MUL) {
         r = a * b;
-      } else {
+      } else if (opcode == GpuOpCode::DIV) {
         if (b == 0.0) {
           return PENALTY;
         }
         r = a / b;
+      } else {
+        r = a / sqrt(1.0 + b * b);
       }
 
       if (!finite_dev(r) || sp >= STACK_CAP) {
@@ -262,6 +294,9 @@ void gpu_eval_destroy(GpuEvalContext & ctx) {
   if (ctx.d_programs) CUDA_CHECK(cudaFree(ctx.d_programs));
   if (ctx.d_lengths) CUDA_CHECK(cudaFree(ctx.d_lengths));
   if (ctx.d_sums) CUDA_CHECK(cudaFree(ctx.d_sums));
+  if (ctx.h_single_length) CUDA_CHECK(cudaFreeHost(ctx.h_single_length));
+  if (ctx.h_single_sum) CUDA_CHECK(cudaFreeHost(ctx.h_single_sum));
+  if (ctx.cuda_stream) CUDA_CHECK(cudaStreamDestroy(eval_stream(ctx)));
   ctx = GpuEvalContext{};
 }
 
@@ -298,6 +333,7 @@ void gpu_eval_ensure_capacity(
 
   if (ctx.d_programs && ctx.d_lengths && ctx.d_sums &&
       ctx.batch_cap >= batch_size && ctx.max_program_len >= max_program_len) {
+    ensure_single_host_buffers(ctx);
     return;
   }
 
@@ -310,6 +346,7 @@ void gpu_eval_ensure_capacity(
   CUDA_CHECK(cudaMalloc(&ctx.d_programs, (size_t) ctx.batch_cap * (size_t) ctx.max_program_len * sizeof(GpuToken)));
   CUDA_CHECK(cudaMalloc(&ctx.d_lengths, (size_t) ctx.batch_cap * sizeof(int)));
   CUDA_CHECK(cudaMalloc(&ctx.d_sums, (size_t) ctx.batch_cap * sizeof(double)));
+  ensure_single_host_buffers(ctx);
 }
 
 void evaluate_fitness_gpu_batch(
@@ -329,18 +366,19 @@ void evaluate_fitness_gpu_batch(
 
   gpu_eval_ensure_capacity(ctx, batch_size, max_program_len);
 
+  ensure_stream(ctx);
+  cudaStream_t stream = eval_stream(ctx);
   const size_t program_bytes = (size_t) batch_size * (size_t) max_program_len * sizeof(GpuToken);
-  CUDA_CHECK(cudaMemcpy(ctx.d_programs, flat_programs, program_bytes, cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(ctx.d_lengths, lengths, (size_t) batch_size * sizeof(int), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemset(ctx.d_sums, 0, (size_t) batch_size * sizeof(double)));
+  CUDA_CHECK(cudaMemcpyAsync(ctx.d_programs, flat_programs, program_bytes, cudaMemcpyHostToDevice, stream));
+  CUDA_CHECK(cudaMemcpyAsync(ctx.d_lengths, lengths, (size_t) batch_size * sizeof(int), cudaMemcpyHostToDevice, stream));
+  CUDA_CHECK(cudaMemsetAsync(ctx.d_sums, 0, (size_t) batch_size * sizeof(double), stream));
 
   const int threads = 256;
-  int blocks_y = (ctx.N + threads - 1) / threads;
-  blocks_y = std::max(1, std::min(blocks_y, 64));
+  int blocks_y = sample_block_count(ctx.N);
   dim3 block(threads);
   dim3 grid((unsigned) batch_size, (unsigned) blocks_y);
 
-  fitness_kernel_batch<<<grid, block>>>(
+  fitness_kernel_batch<<<grid, block, 0, stream>>>(
     ctx.d_programs,
     ctx.d_lengths,
     max_program_len,
@@ -353,13 +391,13 @@ void evaluate_fitness_gpu_batch(
     ctx.d_sums
   );
   CUDA_CHECK(cudaGetLastError());
-  CUDA_CHECK(cudaDeviceSynchronize());
 
-  std::vector<double> sums((size_t) batch_size);
-  CUDA_CHECK(cudaMemcpy(sums.data(), ctx.d_sums, (size_t) batch_size * sizeof(double), cudaMemcpyDeviceToHost));
+  ctx.host_sums.resize((size_t) batch_size);
+  CUDA_CHECK(cudaMemcpyAsync(ctx.host_sums.data(), ctx.d_sums, (size_t) batch_size * sizeof(double), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
   for (int i = 0; i < batch_size; ++i) {
-    double value = sums[(size_t) i] / (double) ctx.N;
+    double value = ctx.host_sums[(size_t) i] / (double) ctx.N;
     if (!std::isfinite(value) || value < 0.0) {
       value = PENALTY;
     }
@@ -372,10 +410,60 @@ double evaluate_fitness_gpu_single(
   const GpuToken * tokens,
   int length
 ) {
-  std::vector<GpuToken> flat((size_t) length);
-  std::copy(tokens, tokens + length, flat.begin());
-  int len = length;
-  double result = 0.0;
-  evaluate_fitness_gpu_batch(ctx, flat.data(), &len, 1, length, &result);
-  return result;
+  if (length <= 0) {
+    return PENALTY;
+  }
+  if (!ctx.initialized || ctx.N <= 0 || ctx.D <= 0) {
+    throw std::runtime_error("GPU eval context is not initialized");
+  }
+
+  gpu_eval_ensure_capacity(ctx, 1, length);
+  ensure_single_host_buffers(ctx);
+
+  *ctx.h_single_length = length;
+  *ctx.h_single_sum = 0.0;
+
+  CUDA_CHECK(cudaMemcpy(
+    ctx.d_programs,
+    tokens,
+    (size_t) length * sizeof(GpuToken),
+    cudaMemcpyHostToDevice
+  ));
+  CUDA_CHECK(cudaMemcpy(
+    ctx.d_lengths,
+    ctx.h_single_length,
+    sizeof(int),
+    cudaMemcpyHostToDevice
+  ));
+  CUDA_CHECK(cudaMemset(ctx.d_sums, 0, sizeof(double)));
+
+  const int threads = 256;
+  dim3 block(threads);
+  dim3 grid(1, (unsigned) sample_block_count(ctx.N));
+  fitness_kernel_batch<<<grid, block>>>(
+    ctx.d_programs,
+    ctx.d_lengths,
+    ctx.max_program_len,
+    ctx.d_X,
+    ctx.d_y,
+    ctx.N,
+    ctx.D,
+    1,
+    static_cast<int>(ctx.fitness_kind),
+    ctx.d_sums
+  );
+  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CUDA_CHECK(cudaMemcpy(
+    ctx.h_single_sum,
+    ctx.d_sums,
+    sizeof(double),
+    cudaMemcpyDeviceToHost
+  ));
+
+  double value = *ctx.h_single_sum / (double) ctx.N;
+  if (!std::isfinite(value) || value < 0.0) {
+    value = PENALTY;
+  }
+  return value;
 }

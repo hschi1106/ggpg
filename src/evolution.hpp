@@ -42,6 +42,7 @@ struct Evolution {
     unordered_set<string> already_generated;
     population.reserve(pop_size);
     int init_attempts = 0;
+    bool defer_fitness_to_gpu = g::using_gpu_backend();
     while (population.size() < pop_size) {
       auto * tree = generate_tree(g::max_depth, g::init_strategy);
       string str_tree = tree->str_subtree();
@@ -54,8 +55,16 @@ struct Evolution {
         continue;
       } 
       already_generated.insert(str_tree);
-      g::fit_func->get_fitness(tree);
+      if (!defer_fitness_to_gpu) {
+        g::fit_func->get_fitness(tree);
+      }
       population.push_back(tree);
+    }
+
+    if (defer_fitness_to_gpu) {
+      GpuBatchEvalScratch scratch;
+      vector<float> initial_fitness;
+      evaluate_nodes_gpu_batch(population, initial_fitness, scratch);
     }
   } 
 
@@ -72,10 +81,14 @@ struct Evolution {
     // perform GOM
     vector<Node*> offspring_population; 
     offspring_population.reserve(pop_size);
+    vector<vector<Node*>> population_nodes;
+    if (g::execution_backend == g::ExecutionBackend::GPU_EXACT_GOM) {
+      population_nodes = collect_population_subtrees(population);
+    }
     for(int i = 0; i < pop_size; i++) {
       Node * offspring = NULL;
       if (g::execution_backend == g::ExecutionBackend::GPU_EXACT_GOM) {
-        offspring = efficient_gom_gpu_exact(population[i], population, fos, *g::gpu_ctx);
+        offspring = efficient_gom_gpu_exact(population[i], population, population_nodes, fos, *g::gpu_ctx);
       } else {
         offspring = efficient_gom_cpu_original(population[i], population, fos);
       }

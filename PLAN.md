@@ -193,6 +193,7 @@ enum class GpuOpCode : int {
     SUB = 2,
     MUL = 3,
     DIV = 4,
+    AQ = 5,
     SIN = 6,
     COS = 7,
     LOG = 9,
@@ -215,6 +216,7 @@ Notes:
 - Later add `float` as an optional performance mode.
 - `var_index` is only used by variable tokens.
 - `value` is only used by constant tokens.
+- `AQ` is the paper analytic quotient primitive, \(a / \sqrt{1 + b^2}\). It is intentionally distinct from upstream `/`.
 
 ### 4.3 Program layout for GPU
 
@@ -771,10 +773,7 @@ function_set:
   - "+"
   - "-"
   - "*"
-  - "/"
-  - sin
-  - cos
-  - log
+  - aq
 
 terminal_set:
   include_features: true
@@ -1298,6 +1297,7 @@ The most likely correctness bug is CPU/GPU mismatch in operator semantics.
 Pay special attention to:
 
 - division and invalid-value handling
+- analytic quotient handling when reproducing paper-style settings
 - exponent overflow
 - NaN / Inf handling
 - constant precision

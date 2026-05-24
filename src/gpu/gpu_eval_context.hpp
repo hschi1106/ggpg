@@ -1,6 +1,8 @@
 #ifndef GPU_EVAL_CONTEXT_HPP
 #define GPU_EVAL_CONTEXT_HPP
 
+#include <vector>
+
 #include "../myeig.hpp"
 #include "gpu_token.hpp"
 
@@ -24,6 +26,13 @@ struct GpuEvalContext {
   GpuToken * d_programs = nullptr;
   int * d_lengths = nullptr;
   double * d_sums = nullptr;
+
+  std::vector<double> host_sums;
+
+  void * cuda_stream = nullptr;
+
+  int * h_single_length = nullptr;
+  double * h_single_sum = nullptr;
 
   const myeig::Mat * host_X = nullptr;
   const myeig::Vec * host_y = nullptr;

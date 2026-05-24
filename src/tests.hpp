@@ -131,6 +131,13 @@ struct Test {
     Mat temp = X.col(0);
     result = op->apply(temp);
     delete op;
+
+    // Analytic quotient: x0 / sqrt(1 + x1^2)
+    op = new AnalyticQuotient();
+    expected << 1.0f / sqrt(5.0f), 3.0f / sqrt(17.0f), 5.0f / sqrt(37.0f);
+    result = op->apply(X);
+    assert(result.isApprox(expected, 1e-6));
+    delete op;
     
   }
 
@@ -188,6 +195,14 @@ struct Test {
     assert(sp.tokens[3].opcode == static_cast<int>(GpuOpCode::ADD));
     assert(sp.tokens[4].opcode == static_cast<int>(GpuOpCode::MUL));
     mock_tree->clear();
+
+    Node * aq_node = new Node(new AnalyticQuotient());
+    aq_node->append(new Node(new Feat(0)));
+    aq_node->append(new Node(new Feat(1)));
+    sp = serialize_active_tree_to_postfix(aq_node);
+    assert(sp.tokens.size() == 3);
+    assert(sp.tokens[2].opcode == static_cast<int>(GpuOpCode::AQ));
+    aq_node->clear();
   }
 
   void converge() {
