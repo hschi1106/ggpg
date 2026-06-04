@@ -27,7 +27,7 @@ inline GpuToken op_to_gpu_token(Op * op) {
     if (std::isnan(c->c)) {
       c->sym();
     }
-    return GpuToken{static_cast<int>(GpuOpCode::CONST), -1, (double) c->c};
+    return GpuToken{static_cast<int>(GpuOpCode::CONST), -1, (float) c->c};
   }
 
   const std::string sym = op->sym();

@@ -9,9 +9,14 @@ import pandas as pd
 from common import REPO_ROOT
 
 
+def grouping_keys(df: pd.DataFrame) -> list[str]:
+    candidates = ["suite", "dataset", "row_scale", "tree_height", "population_size"]
+    return [key for key in candidates if key in df.columns]
+
+
 def write_table_cpu_vs_gpu_exact(df: pd.DataFrame, out: Path) -> None:
     subset = df[df["backend"].isin(["cpu_original", "gpu_exact_gom"])]
-    table = subset.groupby(["dataset", "backend"], dropna=False).agg(
+    table = subset.groupby([*grouping_keys(df), "backend"], dropna=False).agg(
         median_test_nmse=("test_nmse", "median"),
         median_elapsed_sec=("elapsed_sec", "median"),
         median_evals_per_sec=("evals_per_sec", "median"),
@@ -21,7 +26,7 @@ def write_table_cpu_vs_gpu_exact(df: pd.DataFrame, out: Path) -> None:
 
 def write_table_batch_ablation(df: pd.DataFrame, out: Path) -> None:
     subset = df[df["backend"] == "gpu_batch_gom"]
-    table = subset.groupby(["dataset", "gpu_batch_size"], dropna=False).agg(
+    table = subset.groupby([*grouping_keys(df), "gpu_batch_size"], dropna=False).agg(
         median_test_nmse=("test_nmse", "median"),
         median_elapsed_sec=("elapsed_sec", "median"),
         median_evals_per_sec=("evals_per_sec", "median"),
@@ -30,7 +35,7 @@ def write_table_batch_ablation(df: pd.DataFrame, out: Path) -> None:
 
 
 def write_paper_style_nmse(df: pd.DataFrame, out: Path) -> None:
-    table = df.groupby(["dataset", "backend"], dropna=False).agg(
+    table = df.groupby([*grouping_keys(df), "backend"], dropna=False).agg(
         train_nmse=("train_nmse", "median"),
         validation_nmse=("validation_nmse", "median"),
         test_nmse=("test_nmse", "median"),
@@ -72,13 +77,18 @@ def main() -> None:
     plot_if_columns(df[df["backend"] == "gpu_batch_gom"], "gpu_batch_size", "test_nmse", "dataset", figs / "test_nmse_vs_batch_size.png")
     plot_if_columns(df[df["backend"] == "gpu_batch_gom"], "gpu_batch_size", "evals_per_sec", "dataset", figs / "evals_per_sec_vs_batch_size.png")
 
-    if {"backend", "dataset", "gpu_batch_size", "elapsed_sec"}.issubset(df.columns):
-        cpu = df[df["backend"] == "cpu_original"].groupby("dataset")["elapsed_sec"].median()
+    if {"backend", "gpu_batch_size", "elapsed_sec"}.issubset(df.columns):
+        keys = grouping_keys(df)
+        cpu = df[df["backend"] == "cpu_original"].groupby(keys, dropna=False)["elapsed_sec"].median().reset_index()
+        cpu = cpu.rename(columns={"elapsed_sec": "cpu_elapsed_sec"})
         batch = df[df["backend"] == "gpu_batch_gom"].copy()
         if not batch.empty:
-            batch["cpu_elapsed_sec"] = batch["dataset"].map(cpu)
+            batch = batch.merge(cpu, on=keys, how="left")
             batch["speedup"] = batch["cpu_elapsed_sec"] / batch["elapsed_sec"]
             plot_if_columns(batch, "gpu_batch_size", "speedup", "dataset", figs / "speedup_vs_batch_size.png")
+            if "suite" in batch:
+                plot_if_columns(batch[batch["suite"] == "acceleration"], "population_size", "speedup", "dataset", figs / "acceleration_speedup_vs_population.png")
+                plot_if_columns(batch[batch["suite"] == "exact-row-scale"], "row_scale", "speedup", "dataset", figs / "exact_row_scale_speedup.png")
 
 
 if __name__ == "__main__":

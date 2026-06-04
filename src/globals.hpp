@@ -85,6 +85,8 @@ namespace g {
   long long num_rejected_moves = 0;
   long long num_meaningful_candidates = 0;
   long long num_nonmeaningful_candidates = 0;
+  long long num_gpu_batch_launches = 0;
+  long long num_gpu_batch_programs = 0;
   float cmut_eps;
   float cmut_prob;
   float cmut_temp;
@@ -422,6 +424,8 @@ namespace g {
     num_rejected_moves = 0;
     num_meaningful_candidates = 0;
     num_nonmeaningful_candidates = 0;
+    num_gpu_batch_launches = 0;
+    num_gpu_batch_programs = 0;
     for(auto * f : functions) {
       delete f;
     }

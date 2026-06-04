@@ -194,3 +194,17 @@ build*/
 # Runtime scratch files
 results/
 *.log
+
+# LaTeX build products
+report/generated/
+report/figures/
+report/*.aux
+report/*.bbl
+report/*.blg
+report/*.bcf
+report/*.fdb_latexmk
+report/*.fls
+report/*.out
+report/*.run.xml
+report/*.synctex.gz
+report/*.toc

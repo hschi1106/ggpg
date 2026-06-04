@@ -316,7 +316,10 @@ Node * efficient_gom_cpu_original(Node * parent, vector<Node*> & population, vec
     float new_fitness = backup_fitness;
     if (change_is_meaningful) {
       // gotta recompute
+      g::num_meaningful_candidates += 1;
       new_fitness = g::fit_func->get_fitness(offspring);
+    } else {
+      g::num_nonmeaningful_candidates += 1;
     }
 
     // check is not worse
@@ -331,10 +334,14 @@ Node * efficient_gom_cpu_original(Node * parent, vector<Node*> & population, vec
         backup_ops[i] = NULL;
         offspring->fitness = backup_fitness;
       }
+      g::num_rejected_moves += 1;
     } else if (new_fitness < backup_fitness) {
       // it improved
       backup_fitness = new_fitness;
       ever_improved = true;
+      g::num_accepted_moves += 1;
+    } else if (change_is_meaningful) {
+      g::num_accepted_moves += 1;
     }
 
     // discard backup
@@ -381,6 +388,7 @@ Node * efficient_gom_gpu_exact(
   float backup_fitness = parent->fitness;
   vector<Node*> offspring_nodes = offspring->subtree();
   vector<GpuToken> token_scratch;
+  token_scratch.reserve(offspring_nodes.size());
 
   auto random_fos_order = Rng::rand_perm(fos.size());
 
@@ -530,6 +538,8 @@ void evaluate_nodes_gpu_batch(vector<Node*> & nodes, vector<float> & out_fitness
   }
 
   scratch.gpu_fitness.resize(batch_size);
+  g::num_gpu_batch_launches += 1;
+  g::num_gpu_batch_programs += batch_size;
   evaluate_fitness_gpu_batch(
     *g::gpu_ctx,
     scratch.flat_programs.data(),
@@ -555,7 +565,8 @@ void evaluate_nodes_gpu_batch(vector<Node*> & nodes, vector<float> & out_fitness
         scratch.flat_programs.data() + (size_t) i * (size_t) max_program_len,
         scratch.lengths[i]
       );
-      double gpu_tolerance = max(1e-6, abs(gpu_single) * 1e-8);
+      double gpu_scale = max(abs(gpu_single), abs(scratch.gpu_fitness[i]));
+      double gpu_tolerance = max(1e-4, gpu_scale * 1e-5);
       if (isfinite(gpu_single) && isfinite(scratch.gpu_fitness[i]) && abs(gpu_single - scratch.gpu_fitness[i]) > gpu_tolerance) {
         throw runtime_error(
           "GPU batch/single fitness mismatch: single=" + to_string(gpu_single) +
@@ -595,9 +606,9 @@ void gomea_generation_gpu_batch(vector<Node*> & population, vector<vector<int>> 
   vector<float> new_fitnesses;
   vector<Node*> eval_nodes;
   vector<PendingBatchMove> pending_moves;
+  vector<vector<Node*>> population_nodes = collect_population_subtrees(population);
 
   for(int batch_start = 0; batch_start < order.size(); batch_start += pop_batch_size) {
-    vector<vector<Node*>> population_nodes = collect_population_subtrees(population);
     int B = min(pop_batch_size, (int) order.size() - batch_start);
     vector<int> pop_indices(B);
     vector<Node*> candidates(B);
@@ -700,6 +711,7 @@ void gomea_generation_gpu_batch(vector<Node*> & population, vector<vector<int>> 
       int pop_idx = pop_indices[i];
       population[pop_idx]->clear();
       population[pop_idx] = candidates[i];
+      population_nodes[pop_idx] = population[pop_idx]->subtree();
     }
   }
 }

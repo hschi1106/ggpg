@@ -23,7 +23,7 @@ enum class GpuOpCode : int {
 struct GpuToken {
   int opcode = static_cast<int>(GpuOpCode::INVALID);
   int var_index = -1;
-  double value = 0.0;
+  float value = 0.0f;
 };
 
 const char * gpu_opcode_name(int opcode);

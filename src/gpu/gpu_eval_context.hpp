@@ -1,8 +1,6 @@
 #ifndef GPU_EVAL_CONTEXT_HPP
 #define GPU_EVAL_CONTEXT_HPP
 
-#include <vector>
-
 #include "../myeig.hpp"
 #include "gpu_token.hpp"
 
@@ -20,19 +18,24 @@ struct GpuEvalContext {
   int batch_cap = 0;
   GpuFitnessKind fitness_kind = GpuFitnessKind::MSE;
 
-  double * d_X = nullptr;
-  double * d_y = nullptr;
+  float * d_X = nullptr;
+  float * d_y = nullptr;
 
   GpuToken * d_programs = nullptr;
   int * d_lengths = nullptr;
-  double * d_sums = nullptr;
-
-  std::vector<double> host_sums;
+  float * d_sums = nullptr;
 
   void * cuda_stream = nullptr;
 
-  int * h_single_length = nullptr;
-  double * h_single_sum = nullptr;
+  GpuToken * h_programs = nullptr;
+  int * h_lengths = nullptr;
+  float * h_sums = nullptr;
+  size_t h_program_token_cap = 0;
+  int h_batch_cap = 0;
+
+  void * single_graph_exec = nullptr;
+  int single_graph_max_program_len = 0;
+  int single_graph_blocks_y = 0;
 
   const myeig::Mat * host_X = nullptr;
   const myeig::Vec * host_y = nullptr;

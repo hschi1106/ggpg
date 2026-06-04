@@ -81,13 +81,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prepare deterministic paper-style train/validation/test splits.")
     parser.add_argument("--config", type=Path, default=REPO_ROOT / "experiments" / "paper_reproduction_config.yaml")
     parser.add_argument("--datasets", nargs="*", default=None)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
 
     cfg = load_config(args.config)
     datasets = args.datasets or cfg["datasets"]
+    seed = args.seed if args.seed is not None else int(cfg.get("data_split_seed", 0))
     for dataset in datasets:
-        write_split(dataset, args.seed, cfg["train_validation_test_split"])
+        write_split(dataset, seed, cfg["train_validation_test_split"])
 
 
 if __name__ == "__main__":

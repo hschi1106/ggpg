@@ -272,13 +272,33 @@ struct IMS {
         //print("\tperformed evo with pop.size: ",evolutions[i]->pop_size);
       }
 
+      if (stop) {
+        break;
+      }
+
       // decide if some evos should terminate
       terminate_obsolete_evolutions();
 
       // update macro gen
       macro_generations += 1;
-      float curr_best_fit = select_elite(0.0)->fitness;
+      Node * curr_best = select_elite(0.0);
+      float curr_best_fit = curr_best->fitness;
+      double avg_actual_gpu_batch_size = g::num_gpu_batch_launches > 0
+        ? (double) g::num_gpu_batch_programs / (double) g::num_gpu_batch_launches
+        : 0.0;
       print(" ~ macro generation: ", macro_generations, ", curr. best fit: ",curr_best_fit);
+      print("Generation record: generation=", macro_generations,
+            "; elapsed_sec=", tock(start_time),
+            "; best_train_fitness=", curr_best_fit,
+            "; num_evaluations=", g::fit_func->evaluations,
+            "; num_gpu_evaluations=", g::num_gpu_evaluations,
+            "; num_cpu_evaluations=", g::fit_func->evaluations - g::num_gpu_evaluations,
+            "; num_accepted_moves=", g::num_accepted_moves,
+            "; num_rejected_moves=", g::num_rejected_moves,
+            "; num_meaningful_candidates=", g::num_meaningful_candidates,
+            "; num_nonmeaningful_candidates=", g::num_nonmeaningful_candidates,
+            "; avg_actual_gpu_batch_size=", avg_actual_gpu_batch_size,
+            "; best_expression=", curr_best->human_repr());
     }
 
     // finished

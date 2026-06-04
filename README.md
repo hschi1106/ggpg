@@ -26,15 +26,22 @@ cmake --build build/release
 CUDA CMake build:
 
 ```bash
-GPG_USE_CUDA=1 cmake -S . -B build/cuda -DCMAKE_BUILD_TYPE=release -DGPG_USE_CUDA=ON
+GPG_USE_CUDA=1 cmake -S . -B build/cuda -DCMAKE_BUILD_TYPE=release -DGPG_USE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89
 cmake --build build/cuda
 ```
+
+Set `CMAKE_CUDA_ARCHITECTURES` to the target GPU compute capability. The example
+uses `89` for an RTX 4090; compiling only for an older default architecture can
+materially reduce GPU throughput.
 
 CUDA-enabled Python package:
 
 ```bash
 make cuda-release
 ```
+
+The Makefile detects the first visible NVIDIA GPU architecture through `nvidia-smi`.
+Override it for cross-compilation or a different target with `make cuda-release CUDA_ARCH=89`.
 
 ## Usage
 You can try `gpg` out with the following code snippet (or simply run `try.py` if you like):
@@ -89,6 +96,7 @@ This fork keeps `cpu_original` as the upstream GP-GOMEA baseline and adds two CU
 - `gpu_batch_gom`: multiple trial candidates are serialized and evaluated in one CUDA launch. This improves GPU utilization but delays population commits until the current population batch is complete, so it is an approximate acceleration variant.
 
 CUDA kernels never consume `Node*`, `Op*`, or tree pointers. Expressions are serialized on CPU into postfix `GpuToken` programs and copied to fixed-stride GPU buffers.
+For throughput, CUDA fitness evaluation stores inputs, constants, and reduction sums in single precision; `-gpu_check_correctness` uses scale-aware tolerances rather than bitwise CPU/GPU equality.
 
 The upstream division operator `/` is preserved as ordinary division. For paper-comparable experiments that use analytic quotient, select the explicit `aq` primitive:
 
@@ -176,30 +184,43 @@ python3 experiments/download_datasets.py
 python3 experiments/prepare_paper_datasets.py
 ```
 
-Run the fast development benchmark:
+Inspect the acceleration-focused matrix:
 
 ```bash
-python3 experiments/run_paper_cpu_baseline.py --datasets "Yacht hydrodynamics" --seeds 0 1 --tree-heights 4 --time-limit 300
-python3 experiments/run_gpu_exact.py --datasets "Yacht hydrodynamics" --seeds 0 1 --time-limit 300
-python3 experiments/run_gpu_batch_ablation.py --datasets "Yacht hydrodynamics" --seeds 0 1 --gpu-batch-sizes 1 8 32 128 --time-limit 300
+python3 experiments/run_paper_full_suite.py --suite acceleration --dry-run
 ```
 
-Inspect the full paper-style matrix before launching it:
+Run the acceleration-focused matrix:
 
 ```bash
-python3 experiments/run_paper_full_suite.py --dry-run --gpu-batch-sizes 32
+python3 experiments/run_paper_full_suite.py --suite acceleration --backends cpu_original --jobs 1 --resume --confirm-long-run
+python3 experiments/run_paper_full_suite.py --suite acceleration --backends gpu_exact_gom gpu_batch_gom --jobs 2 --gpu-devices 0 1 --resume --confirm-long-run
 ```
 
-The default fixed-population matrix is 10 datasets x 30 seeds x 3 tree heights x 3 backends, with a 1000 second time budget per run. The script refuses to start long matrices unless `--confirm-long-run` is supplied:
+Run the smaller batch-size scaling suite:
 
 ```bash
-python3 experiments/run_paper_full_suite.py --gpu-batch-sizes 32 --resume --confirm-long-run
+python3 experiments/run_paper_full_suite.py --suite batch-scaling --backends cpu_original --jobs 1 --resume --confirm-long-run
+python3 experiments/run_paper_full_suite.py --suite batch-scaling --backends gpu_exact_gom gpu_batch_gom --jobs 2 --gpu-devices 0 1 --resume --confirm-long-run
 ```
 
-IMS settings can be run separately with:
+Inspect the generation-controlled quality matrix:
 
 ```bash
-python3 experiments/run_paper_full_suite.py --include-ims --ims-g-values 4 6 8 --gpu-batch-sizes 32 --resume --confirm-long-run
+python3 experiments/run_paper_full_suite.py --suite paper --dry-run
+```
+
+Run the 100-generation fitness-evolution study:
+
+```bash
+python3 experiments/run_paper_full_suite.py --suite fitness-evolution --backends cpu_original --jobs 1 --resume --confirm-long-run
+python3 experiments/run_paper_full_suite.py --suite fitness-evolution --backends gpu_exact_gom gpu_batch_gom --jobs 2 --gpu-devices 0 1 --resume --confirm-long-run
+```
+
+Run the bounded selected Paper-G external-reference comparison:
+
+```bash
+python3 experiments/run_paper_full_suite.py --suite paper-g-reference --jobs 1 --resume --confirm-long-run
 ```
 
 Analyze results:
@@ -207,6 +228,22 @@ Analyze results:
 ```bash
 python3 experiments/analyze_results.py --input results/final_results.csv
 python3 experiments/stats.py --input results/final_results.csv
+```
+
+When `-verbose` is enabled, each macro generation emits a machine-readable
+`Generation record:` line containing the best expression, elapsed time, and
+cumulative GOM counters. The reproduction harness reevaluates each recorded
+expression on the prepared train, validation, and test splits before writing the
+generation CSV. Final run metrics are selected by reevaluating all archived elites
+and choosing the lowest validation NMSE; generation curves still represent the
+current training-fitness best expression.
+
+Generate and compile the conference-style report after the required suites finish:
+
+```bash
+python3 experiments/summarize_nsys_profiles.py
+python3 experiments/generate_conference_report_assets.py
+make -C report
 ```
 
 The primary valid comparison is same machine, same codebase:

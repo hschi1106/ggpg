@@ -10,6 +10,8 @@ terminal_set:
   include_features: true
   include_erc: true
 
+fitness_function: mse
+
 erc_bounds: "min_x_to_max_x"
 
 train_validation_test_split:
@@ -17,7 +19,9 @@ train_validation_test_split:
   validation: 0.25
   test: 0.25
 
-repetitions: 30
+data_split_seed: 0
+
+repetitions: 5
 
 tree_heights:
   - 3
@@ -29,14 +33,28 @@ max_nodes:
   h4: 31
   h5: 63
 
-fixed_population_size: 1000
+fixed_population_size: 1024
+
+population_sizes:
+  - 1024
+
+gpu_batch_sizes:
+  - 64
+  - 128
+  - 256
+  - 512
+  - 1024
+
+generations: 100
+
+coefficient_mutation_probability: 0.1
 
 ims_g_values:
   - 4
   - 6
   - 8
 
-time_limit_seconds: 1000
+time_limit_seconds: -1
 
 datasets:
   - Airfoil
@@ -56,17 +74,153 @@ fast_development_benchmark:
     - Airfoil
     - Wine white
     - Dow chemical
-  tree_height: 4
-  max_nodes: 31
-  population_size: 1000
-  time_limit_seconds: 300
-  seeds: 10
+  tree_heights:
+    - 3
+    - 4
+    - 5
+  max_nodes:
+    h3: 15
+    h4: 31
+    h5: 63
+  population_sizes:
+    - 1024
+  generations: 100
+  coefficient_mutation_probability: 0.1
+  time_limit_seconds: -1
+  seeds: 5
+  backends:
+    - cpu_original
+    - gpu_exact_gom
+    - gpu_batch_gom
+  gpu_batch_sizes:
+    - 64
+    - 128
+    - 256
+    - 512
+    - 1024
+
+acceleration_suite:
+  datasets:
+    - Wine white
+    - Tower
+    - Airfoil
+    - Dow chemical
+  row_scales:
+    - 8
+    - 16
+    - 32
+  tree_heights:
+    - 3
+  population_sizes:
+    - 512
+    - 1024
+    - 2048
+    - 4096
+    - 8192
+  generations: 1
+  seeds: 5
+  backends:
+    - cpu_original
+    - gpu_exact_gom
+    - gpu_batch_gom
+  gpu_batch_sizes:
+    - 64
+    - 128
+    - 256
+    - 512
+    - 1024
+
+batch_size_scaling_suite:
+  datasets:
+    - Wine white
+  row_scales:
+    - 32
+  tree_heights:
+    - 3
+  population_sizes:
+    - 4096
+  generations: 1
+  seeds: 5
   backends:
     - cpu_original
     - gpu_exact_gom
     - gpu_batch_gom
   gpu_batch_sizes:
     - 1
-    - 8
     - 32
+    - 64
     - 128
+    - 256
+    - 512
+    - 1024
+
+exact_row_scale_suite:
+  datasets:
+    - Wine white
+  row_scales:
+    - 1
+    - 4
+    - 8
+    - 16
+    - 32
+  tree_heights:
+    - 3
+  population_sizes:
+    - 256
+  generations: 2
+  seeds: 5
+  backends:
+    - cpu_original
+    - gpu_exact_gom
+    - gpu_batch_gom
+  gpu_batch_sizes:
+    - 512
+
+fitness_evolution_suite:
+  datasets:
+    - Wine white
+    - Tower
+    - Airfoil
+    - Yacht hydrodynamics
+  row_scales:
+    - 1
+  tree_heights:
+    - 3
+    - 4
+    - 5
+  population_sizes:
+    - 1024
+  generations: 100
+  seeds: 5
+  backends:
+    - cpu_original
+    - gpu_exact_gom
+    - gpu_batch_gom
+  gpu_batch_sizes:
+    - 64
+    - 128
+    - 256
+    - 512
+    - 1024
+
+paper_g_reference_suite:
+  datasets:
+    - Airfoil
+    - Dow chemical
+    - Wine white
+    - Yacht hydrodynamics
+  row_scales:
+    - 1
+  tree_heights:
+    - 4
+  population_sizes:
+    - 1000
+  generations: -1
+  time_limit_seconds: 60
+  fitness_function: ac
+  coefficient_mutation_probability: 0.0
+  seeds: 5
+  backends:
+    - cpu_original
+  gpu_batch_sizes:
+    - 1
