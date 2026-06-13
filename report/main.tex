@@ -1,603 +1,410 @@
-\documentclass[sigconf,nonacm]{acmart}
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
 
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm}
+\usepackage{algorithmic}
 \usepackage{booktabs}
 \usepackage{graphicx}
-\usepackage{amsmath}
-\usepackage{microtype}
-\usepackage{multirow}
-\usepackage{subcaption}
-\usepackage{tikz}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
 \usepackage{xspace}
-\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
-\usetikzlibrary{positioning}
 
 \graphicspath{{figures/}}
 \input{generated/metrics.tex}
 
 \newcommand{\gpgomea}{GP-GOMEA\xspace}
-\newcommand{\exactgpu}{\texttt{gpu\_exact\_gom}\xspace}
-\newcommand{\batchgpu}{\texttt{gpu\_batch\_gom}\xspace}
-\newcommand{\cpuoriginal}{\texttt{cpu\_original}\xspace}
+\newcommand{\cpuoriginal}{\texttt{cpu\_original}}
+\newcommand{\exactgpu}{\texttt{gpu\_exact\_gom}}
+\newcommand{\batchgpu}{\texttt{gpu\_batch\_gom}}
 \newcommand{\aq}{\operatorname{AQ}}
-
-\title{Accelerating GP-GOMEA for Symbolic Regression with Exact and Batched GPU Fitness Evaluation}
-
-\author{Anonymous Author(s)}
-\affiliation{\institution{Anonymous Institution}\city{Anonymous City}\country{Anonymous Country}}
+\newcommand{\mainbodyendpage}{?}
+\AtEndDocument{%
+  \typeout{====================================================}%
+  \typeout{[PAGE BUDGET] Main body + references end on page \mainbodyendpage\space (limit: 6, Appendix excluded).}%
+  \typeout{====================================================}%
+}
 
 \begin{document}
 
-\begin{abstract}
-Gene-pool Optimal Mixing Evolutionary Algorithms for genetic programming (\gpgomea) can find compact symbolic-regression models, but their variation operator repeatedly evaluates small, sequentially dependent candidate changes.
-This execution pattern underutilizes a GPU when each candidate is dispatched independently.
-We design two CUDA backends for \gpgomea: a control-flow exact backend that preserves immediate Gene-pool Optimal Mixing accept--reject decisions, and a batched backend that evaluates multiple candidate programs per launch while delaying some population updates.
-Expressions are serialized into postfix token programs and evaluated by a sample-parallel stack-machine kernel.
-The implementation further uses single-precision device data, reusable pinned and device buffers, CUDA Graph replay for exact evaluation, and host-side subtree and serialization caches.
-Across a throughput stress-test matrix containing \AccelerationRuns{} runs, exact GPU evaluation achieves a median \ExactMedianSpeedup$\times$ wall-clock speedup over the original CPU path, while the best batched configuration reaches \BestBatchMedianSpeedup$\times$.
-On a separate 100-generation study, batched evaluation changes the evolutionary trajectory and therefore must be treated as an approximate algorithmic variant rather than a transparent implementation optimization.
-These results characterize the workload scale at which exact GPU evaluation becomes useful and the quality--throughput tradeoff introduced by batching.
-A bounded selected Paper-G rerun is included for context; the full reference-paper experiment matrix was not rerun.
-\end{abstract}
+\title{Parallelizing GP-GOMEA Symbolic Regression with Exact and Batched GPU Fitness Evaluation\\
+{\footnotesize Final Project --- Parallel Programming, Spring 2026}}
 
-\keywords{genetic programming, symbolic regression, GP-GOMEA, GPU acceleration, CUDA, batched evaluation}
+\author{%
+\IEEEauthorblockN{Anonymous Author(s)}
+\IEEEauthorblockA{Parallel Programming Final Project}}
 
 \maketitle
 
+\begin{abstract}
+Gene-pool Optimal Mixing Evolutionary Algorithms for genetic programming
+(\gpgomea) repeatedly test small candidate modifications to symbolic-regression
+trees. The fitness calculation is data parallel, but the accept--reject control
+flow is sequential: launching one GPU evaluation for each candidate GOM move can
+be slower than the CPU, while batching moves changes the search. This project
+implements and evaluates two CUDA backends for \gpgomea. The exact GPU backend
+preserves immediate GOM decisions and accelerates only the fitness evaluator;
+the batched backend evaluates many candidate programs per launch and commits
+updates after a local population batch. Expressions are serialized into postfix
+token programs and interpreted by CUDA blocks over training samples. Across a
+scaling study that varies dataset size, population size, and batch size, exact
+GPU evaluation reaches a median \ExactMedianSpeedup$\times$ wall-clock speedup
+over the CPU baseline, while the best batch configuration reaches
+\BestBatchMedianSpeedup$\times$ and a maximum \BestBatchMaxSpeedup$\times$. A
+100-generation study shows that batching does not cause a statistically
+significant final fitness regression in this subset, but it changes trajectories
+and must be treated as an approximate parallel algorithm.
+\end{abstract}
+
+\begin{IEEEkeywords}
+parallel genetic programming, CUDA, symbolic regression, GP-GOMEA, GPU batching
+\end{IEEEkeywords}
+
+\vspace{0.5em}
+\noindent\fbox{\parbox{0.97\columnwidth}{\textbf{Project Category:}\quad
+$\boxtimes$~\textbf{A} (Self-chosen topic)\qquad
+$\square$~\textbf{B} (AI-agent code optimization)}}
+
 \section{Introduction}
 
-Symbolic regression searches for an analytic expression that explains observed input--output data.
-Genetic programming (GP) is a natural approach because it directly evolves expression trees, but conventional variation often disrupts useful subexpressions and can produce unnecessarily large models~\cite{koza1992genetic,polirefieldguide}.
-\gpgomea addresses this problem with linkage learning and Gene-pool Optimal Mixing (GOM), which modifies selected locations while retaining a change only when it does not degrade fitness~\cite{virgolin2017scalable,virgolin2021improving}.
-The resulting search is effective for small expressions, yet computationally demanding: a generation may contain many more fitness evaluations than the population size, and each accepted move changes the state used by later moves.
+Symbolic regression searches for an analytic expression that predicts a target
+variable from input features. Genetic programming (GP) is a natural fit because
+it evolves expression trees directly~\cite{koza1992genetic,polirefieldguide}, but
+tree variation is expensive: every candidate expression must be evaluated over a
+training set. \gpgomea improves the search by using linkage learning and
+Gene-pool Optimal Mixing (GOM), which replaces linked tree positions with donor
+material and keeps a change only if fitness does not worsen~\cite{virgolin2017scalable,virgolin2021improving}.
 
-GP fitness evaluation is data parallel, making GPUs an attractive target~\cite{langdon2008simd}.
-However, the natural unit of GOM work is often a single small candidate tree evaluated over a modest number of samples.
-Launching one GPU kernel per candidate can cost more than evaluating that candidate on a CPU.
-Combining candidates into larger launches improves utilization, but changes the sequential dependency structure that defines exact GOM.
-The engineering question and the algorithmic question are therefore inseparable: how can \gpgomea expose enough parallel work for a GPU, and what search distortion is introduced when candidate decisions are batched?
+The parallel-programming challenge is that \gpgomea exposes two incompatible
+forms of parallelism. Fitness evaluation over independent training samples is
+highly data parallel, but GOM decisions are sequential: the next candidate
+depends on whether previous moves were accepted. A naive GPU implementation
+launches one small kernel per meaningful move and can lose to CPU launch
+overhead. A batched implementation improves occupancy and amortizes launches,
+but delayed commits alter the algorithm. This project asks where the exact GPU
+crossover occurs, how much batching improves throughput, and how much search
+distortion batching introduces.
 
-This paper makes the following contributions:
-
-\begin{itemize}
-  \item We present a CUDA fitness-evaluation path that serializes pointer-rich expression trees into compact postfix programs and maps one program to a CUDA block, allowing threads in a warp to execute the same tree instructions over different samples.
-  \item We distinguish a control-flow exact GPU backend from a delayed-commit batched backend, making the semantic cost of batching explicit.
-  \item We describe and evaluate implementation techniques that reduce launch, transfer, allocation, and serialization overhead for both GPU paths.
-  \item We measure acceleration across population size and data size, then separately study fitness evolution and batch-induced distortion over 100 generations.
-\end{itemize}
+The contribution is a CUDA implementation and evaluation of three backends:
+the original CPU path, a control-flow exact GPU path, and a delayed-commit
+batched GPU path. The design linearizes pointer-heavy expression trees into
+postfix token programs, maps one candidate program to a CUDA block, parallelizes
+across samples inside the block, and uses CUDA Graph replay, reusable pinned
+buffers, capacity-managed device buffers, and host-side serialization caches to
+reduce overhead.
 
 \section{Background and Related Work}
 
-\subsection{GP-GOMEA}
+\subsection{GP-GOMEA and the Baseline}
 
-\gpgomea represents each individual with a fixed full-tree template.
-Inactive nodes allow the expressed model to have a smaller shape, while the fixed genotype gives every tree location a stable index~\cite{virgolin2021improving}.
-The population is used to learn a linkage model, represented as a Family of Subsets (FOS), whose subsets identify locations that should be mixed together~\cite{thierens2013optimal,virgolin2017scalable}.
+\gpgomea represents each individual with a fixed tree template. Some nodes may
+be inactive, but every location has a stable index. A Family of Subsets (FOS)
+describes linked locations that should be mixed together~\cite{thierens2013optimal}.
+For each parent, GOM visits FOS subsets in random order, chooses a donor, copies
+the selected operators, applies coefficient mutation, and evaluates the modified
+tree if the expressed model changed. A lower MSE is better; a non-worsening move
+is accepted immediately, and a worsening move is rolled back. This immediate
+update visibility is part of the algorithm, not an implementation detail.
 
-For each parent, GOM visits FOS subsets in randomized order.
-It copies the corresponding operators from a donor, evaluates the modified individual, and immediately accepts a non-worsening move or restores the previous operators.
-This immediate accept--reject behavior is important: the candidate generated for the next FOS subset depends on every earlier decision.
-The original CPU implementation evaluates each meaningful candidate as soon as it is created.
-
-The reference symbolic-regression study improves \gpgomea for small expressions and evaluates fixed-population and Interleaved Multistart Scheme settings over multiple datasets~\cite{virgolin2021improving}.
-Our work does not propose a new linkage model.
-It targets the computational bottleneck created by repeated candidate fitness evaluation.
+The reference symbolic-regression paper studies small-expression
+\gpgomea~\cite{virgolin2021improving}. Its setup motivates our function set and
+selected comparison to the fixed-population GP-GOMEA setting denoted \(G\) in
+that paper, including the analytic quotient operator
+\(\aq(a,b)=a/\sqrt{1+b^2}\)~\cite{ni2013analytic}. We do not rerun the full
+reference-paper matrix; our main focus is parallel acceleration and the
+algorithmic cost of batching.
 
 \subsection{GPU Genetic Programming}
 
-Prior GPU GP systems exploit the fact that many fitness cases can be evaluated independently, commonly using interpreters or linearized programs on the device~\cite{langdon2008simd}.
-The challenge for \gpgomea is finer-grained than a conventional generational GP evaluation: meaningful candidates appear throughout GOM, candidate program shapes differ, and exact decisions are sequential.
-Our design follows the established idea of device-side program interpretation, but adapts it to GOM's immediate and batched candidate-evaluation modes.
+GPU GP systems commonly exploit data-parallel fitness evaluation using
+linearized programs or interpreters~\cite{langdon2008simd}. Our workload is
+finer-grained than conventional generational GP: candidate programs are small,
+meaningful candidates appear throughout GOM, and exact accept--reject decisions
+are sequential. The core question is therefore not simply ``can fitness run on a
+GPU?'' but where exact GPU evaluation becomes worthwhile, and how much search
+distortion is traded for throughput when candidate evaluations are batched.
 
-\section{GPU-Accelerated GP-GOMEA}
+\section{Methodology}
 
-\subsection{Execution Backends}
+\subsection{Program Representation and Kernel Mapping}
 
-The implementation exposes three backends:
+CUDA kernels never consume C++ \texttt{Node*} or virtual \texttt{Op*} objects.
+Each active expression is serialized on the host into a compact postfix sequence
+of \texttt{GpuToken} records. A token stores an opcode, an optional feature
+index, and an optional constant. Batched evaluation stores programs in a
+fixed-stride padded array and stores active lengths separately.
 
-\begin{description}
-  \item[\cpuoriginal] The upstream CPU evaluation and GOM control flow.
-  \item[\exactgpu] Immediate GOM decisions are preserved, but each meaningful candidate is evaluated on the GPU.
-  \item[\batchgpu] Multiple candidates are collected, evaluated together, and committed after the batch-local decision phase.
-\end{description}
+The GPU kernel assigns one candidate program to one CUDA block. Threads inside
+the block evaluate the same postfix instruction sequence on different training
+samples and reduce the per-sample losses into a candidate MSE. This mapping
+avoids the dominant structural warp-divergence problem: lanes in a warp do not
+interpret unrelated trees. Different tree lengths are handled across blocks,
+where the GPU scheduler can overlap work from many programs.
 
-\exactgpu is \emph{control-flow exact}: it preserves the timing and ordering of GOM decisions.
-It is not bitwise identical to the CPU backend because device math and parallel reduction ordering differ from host evaluation, even though both paths store single-precision values.
-Small numerical differences can change a tie or accept--reject decision.
-\batchgpu additionally changes donor visibility and candidate state by delaying commits, so it is an approximate search algorithm even if its arithmetic were identical.
+\subsection{Algorithms}
 
-\begin{table}[t]
-\centering
-\caption{Execution semantics of the evaluated backends.}
-\label{tab:backend-semantics}
-\small
-\resizebox{\columnwidth}{!}{%
-\begin{tabular}{lp{0.17\columnwidth}p{0.23\columnwidth}p{0.16\columnwidth}}
-\toprule
-Backend & Candidate grouping & Accepted-move visibility & Fitness arithmetic \\
-\midrule
-\cpuoriginal & One candidate & Immediate & Host \texttt{float} \\
-\exactgpu & One candidate & Immediate & Device \texttt{float} \\
-\batchgpu & Multiple candidates & After batch-local decisions & Device \texttt{float} \\
-\bottomrule
-\end{tabular}
-}
-\end{table}
-
-\subsection{Algorithms and Update Semantics}
-
-Algorithms~\ref{alg:cpu-gom}--\ref{alg:batch-gom} make the semantic boundary between the three backends explicit.
-\textsc{MixAndMutate} copies the operators selected by an FOS subset from a random donor and applies coefficient mutation, while retaining a rollback record.
-A move is meaningful when at least one effectively changed node is active rather than an intron.
-Nonmeaningful changes are retained without reevaluation because they do not change the expressed model.
-\textsc{Finalize} applies the implementation's optional tournament-based forced-improvement fallback when no strictly improving move was found.
+Algorithm~\ref{alg:gom} shows the sequential GOM skeleton. The exact GPU backend
+follows this control flow and replaces only the fitness call with immediate GPU
+evaluation. Algorithm~\ref{alg:batch} shows the batched backend. It clones a
+population batch into local candidates, evaluates the meaningful candidates from
+one FOS step in a single GPU launch, and commits the local candidates only after
+the batch finishes.
 
 \begin{algorithm}[t]
-\small
-\DontPrintSemicolon
-\KwIn{parent $x$, population $P$, FOS $\mathcal{F}$}
-\KwOut{offspring $x'$}
-$x' \leftarrow \operatorname{clone}(x)$; $f \leftarrow \operatorname{fitness}(x)$; $improved \leftarrow false$\;
-\ForEach{$S \in \operatorname{shuffle}(\mathcal{F})$}{
-  $d \leftarrow \operatorname{uniform}(P)$\;
-  $(r, meaningful) \leftarrow \textsc{MixAndMutate}(x',d,S)$\;
-  \If{$meaningful$}{
-    $f' \leftarrow \textsc{CPUFitness}(x')$\;
-    \eIf{$f' \leq f$}{
-      discard $r$; $improved \leftarrow improved \lor (f' < f)$; $f \leftarrow f'$\;
-    }{
-      $\textsc{Rollback}(x',r,f)$\;
-    }
-  }
-  \Else{discard $r$}
-}
-\Return $\textsc{Finalize}(x',P,improved)$\;
-\caption{Original sequential CPU GOM for one parent. Every meaningful move is decided immediately.}
-\label{alg:cpu-gom}
+\caption{Sequential GOM for one parent}
+\label{alg:gom}
+\footnotesize
+\begin{algorithmic}[1]
+\REQUIRE parent \(x\), population \(P\), FOS \(\mathcal{F}\)
+\STATE \(x' \leftarrow clone(x)\), \(f \leftarrow fitness(x)\)
+\FOR{each \(S \in shuffle(\mathcal{F})\)}
+  \STATE \(d \leftarrow uniform(P)\)
+  \STATE \((r,meaningful) \leftarrow MixAndMutate(x',d,S)\)
+  \IF{\(meaningful\)}
+    \STATE \(f' \leftarrow Fitness(x')\)
+    \IF{\(f' \le f\)}
+      \STATE discard rollback \(r\); \(f \leftarrow f'\)
+    \ELSE
+      \STATE \(Rollback(x',r,f)\)
+    \ENDIF
+  \ELSE
+    \STATE discard \(r\)
+  \ENDIF
+\ENDFOR
+\RETURN \(x'\)
+\end{algorithmic}
 \end{algorithm}
 
 \begin{algorithm}[t]
-\small
-\DontPrintSemicolon
-\KwIn{parent $x$, population $P$, FOS $\mathcal{F}$}
-\KwOut{offspring $x'$}
-$x' \leftarrow \operatorname{clone}(x)$; $f \leftarrow \operatorname{fitness}(x)$; $improved \leftarrow false$\;
-\ForEach{$S \in \operatorname{shuffle}(\mathcal{F})$}{
-  $d \leftarrow \operatorname{uniform}(P)$\;
-  $(r, meaningful) \leftarrow \textsc{MixAndMutate}(x',d,S)$\;
-  \If{$meaningful$}{
-    $z \leftarrow \textsc{SerializePostfix}(x')$\;
-    $f' \leftarrow \textsc{GraphReplayGPUFitness}(z)$\;
-    \eIf{$f' \leq f$}{
-      discard $r$; $improved \leftarrow improved \lor (f' < f)$; $f \leftarrow f'$\;
-    }{
-      $\textsc{Rollback}(x',r,f)$\;
-    }
-  }
-  \Else{discard $r$}
-}
-\Return $\textsc{Finalize}(x',P,improved)$\;
-\caption{Control-flow exact GPU GOM for one parent. GPU arithmetic can still change numerical ties.}
-\label{alg:exact-gom}
+\caption{Batched GPU GOM for one generation}
+\label{alg:batch}
+\footnotesize
+\begin{algorithmic}[1]
+\REQUIRE population \(P\), FOS \(\mathcal{F}\), batch size \(B\)
+\FOR{each batch \(I\) of at most \(B\) population slots}
+  \STATE \(C \leftarrow \{c_i = clone(P_i): i \in I\}\)
+  \STATE \(O_i \leftarrow shuffle(\mathcal{F})\) for each \(c_i \in C\)
+  \STATE \(f_i \leftarrow fitness(c_i)\) for each \(c_i \in C\)
+  \FOR{\(s = 1,\ldots,|\mathcal{F}|\)}
+    \STATE \(Q \leftarrow \emptyset\)
+    \FOR{each candidate \(c_i \in C\)}
+      \STATE \(S \leftarrow O_i[s]\), \(d \leftarrow uniform(P)\)
+      \STATE \((r_i,m_i) \leftarrow MixAndMutate(c_i,d,S)\)
+      \IF{\(m_i\)}
+        \STATE \(Q \leftarrow Q \cup \{(i,r_i)\}\)
+      \ELSE
+        \STATE discard \(r_i\)
+      \ENDIF
+    \ENDFOR
+    \STATE \(G \leftarrow GPUFitness(\{c_i \mid (i,r_i) \in Q\})\)
+    \FOR{each \((i,r_i) \in Q\)}
+      \IF{\(G_i \le f_i\)}
+        \STATE accept move; \(f_i \leftarrow G_i\)
+      \ELSE
+        \STATE \(Rollback(c_i,r_i)\)
+      \ENDIF
+    \ENDFOR
+  \ENDFOR
+  \STATE commit each \(c_i \in C\) back to slot \(P_i\)
+\ENDFOR
+\end{algorithmic}
 \end{algorithm}
 
-\begin{algorithm*}[t]
-\small
-\DontPrintSemicolon
-\KwIn{population $P$, FOS $\mathcal{F}$, requested population-batch size $B$}
-\KwOut{updated population $P$}
-\ForEach{index batch $I \in \operatorname{partition}(\operatorname{shuffle}([1,|P|]),B)$}{
-  $V \leftarrow$ read-only donor view of the currently committed $P$\;
-  \ForEach{$i \in I$}{
-    $c_i \leftarrow \operatorname{clone}(P_i)$; $f_i \leftarrow \operatorname{fitness}(P_i)$;
-    $\pi_i \leftarrow \operatorname{shuffle}(\mathcal{F})$; $improved_i \leftarrow false$\;
-  }
-  \For{$s \leftarrow 1$ \KwTo $|\mathcal{F}|$}{
-    $E \leftarrow [\ ]$; $R \leftarrow [\ ]$\;
-    \ForEach{$i \in I$}{
-      $d \leftarrow \operatorname{uniform}(V)$\;
-      $(r_i, meaningful_i) \leftarrow \textsc{MixAndMutate}(c_i,d,\pi_i[s])$\;
-      \eIf{$meaningful_i$}{append $c_i$ to $E$ and $(i,r_i)$ to $R$}{discard $r_i$}
-    }
-    $F_E \leftarrow \textsc{BatchGPUFitness}(\textsc{SerializePostfix}(E))$\;
-    \ForEach{paired result $(f'_k,(i,r_i)) \in (F_E,R)$}{
-      \eIf{$f'_k \leq f_i$}{
-        discard $r_i$; $improved_i \leftarrow improved_i \lor (f'_k < f_i)$; $f_i \leftarrow f'_k$\;
-      }{
-        $\textsc{Rollback}(c_i,r_i,f_i)$\;
-      }
-    }
-  }
-  \ForEach{$i \in I$}{$P_i \leftarrow \textsc{Finalize}(c_i,P,improved_i)$}
-}
-\Return $P$\;
-\caption{Delayed-commit batch GPU GOM for one generation. Candidates within a batch advance through FOS steps, but their completed offspring are not visible as donors until the entire population batch is committed.}
-\label{alg:batch-gom}
-\end{algorithm*}
+\subsection{Optimization Techniques}
 
-\begin{figure}[t]
-\centering
-\resizebox{\columnwidth}{!}{%
-\begin{tikzpicture}[
-  node distance=4mm and 6mm,
-  box/.style={draw, rounded corners=1pt, align=center, minimum height=7mm, minimum width=18mm, font=\scriptsize},
-  arrow/.style={->, >=stealth, thick}
-]
-  \node[box] (tree) {Host tree\\and FOS move};
-  \node[box, right=of tree] (tokens) {Postfix\\token program};
-  \node[box, right=of tokens] (buffer) {Pinned host\\buffer};
-  \node[box, right=of buffer] (kernel) {CUDA stack\\interpreter};
-  \node[box, below=of kernel] (samples) {Threads evaluate\\different samples};
-  \node[box, below=of tree] (decision) {Accept or reject\\GOM move};
-  \draw[arrow] (tree) -- (tokens);
-  \draw[arrow] (tokens) -- (buffer);
-  \draw[arrow] (buffer) -- (kernel);
-  \draw[arrow] (kernel) -- (samples);
-  \draw[arrow] (samples) -- (decision);
-  \draw[arrow] (decision) -- (tree);
-\end{tikzpicture}
-}
-\caption{GPU fitness-evaluation path. Exact evaluation traverses this loop once per meaningful move; batched evaluation packs multiple token programs before launching the kernel.}
-\Description{Block diagram showing host trees converted to postfix token programs, copied through pinned buffers, evaluated by a CUDA stack interpreter, and returned to GOM accept-reject decisions.}
-\label{fig:architecture}
-\end{figure}
+The exact path is launch-bound, so it uses CUDA Graph replay for the repeated
+copy--clear--kernel--copy sequence, pinned host buffers, capacity-managed device
+buffers, and single-precision device arrays. The batch path uses the same token
+format but increases program-level parallelism by evaluating up to the requested
+batch size of meaningful candidates per launch. Host-side subtree vectors and
+serialization buffers are cached to reduce per-candidate allocation. A persistent
+kernel was tested during development but rejected because queue management and
+synchronization overhead outweighed launch savings for this workload.
 
-\subsection{Postfix Program Representation}
+\section{Experimental Setup}
 
-CUDA kernels do not receive C++ \texttt{Node} or \texttt{Op} pointers.
-Each active expression is serialized on the host into a postfix sequence of \texttt{GpuToken} records.
-A token contains an opcode, an optional feature index, and an optional constant.
-The function set includes addition, subtraction, multiplication, and an explicit analytic quotient,
-\begin{equation}
-  \aq(a,b) = \frac{a}{\sqrt{1+b^2}},
-\end{equation}
-matching the operator used by the reference paper without changing the semantics of the upstream division operator~\cite{ni2013analytic}.
+Experiments ran on an AMD Ryzen 9 7950X CPU, 61~GiB of memory, and two NVIDIA
+RTX 4090 GPUs. CUDA code was built for compute capability 8.9. GPU timing uses
+at most one process per physical GPU; CPU baselines are run sequentially to avoid
+contention. All main suites use five search seeds, fixed seed-0 train/validation
+/test splits, function set \(+,-,\times,\aq\), MSE fitness, and IMS disabled.
 
-The batched representation stores token programs in a fixed-stride padded buffer and stores their active lengths separately.
-The device kernel interprets one program per CUDA block and distributes fitness cases across the block's threads.
-This mapping is central to handling tree-induced warp divergence.
-All threads in a warp execute the same postfix instruction sequence for one expression, but on different rows of the dataset.
-Programs with different shapes are assigned to different blocks rather than different lanes of the same warp.
-Data-dependent exceptional cases can still diverge, but structural tree divergence is kept out of the warp.
+We measure wall-clock speedup \(S=t_{CPU}/t_{GPU}\) and evaluation-throughput
+ratio separately, because batch search may evaluate a different number of
+candidates. Correctness is checked at three levels: GPU batch versus GPU single
+fitness, GPU versus CPU fitness with scale-aware floating-point tolerance, and
+end-to-end validation/test reevaluation of archived elites. The exact GPU path
+preserves GOM control flow but is not bitwise identical because device math and
+parallel reductions can change ties. The batch GPU path is deliberately
+approximate because population commits are delayed.
 
-\subsection{Exact GPU Evaluation}
-
-Algorithm~\ref{alg:exact-gom} differs from original GOM in Algorithm~\ref{alg:cpu-gom} only at the meaningful-candidate fitness-evaluation boundary.
-The exact backend serializes and evaluates each meaningful GOM candidate immediately.
-This preserves GOM's update visibility, but the workload is vulnerable to kernel-launch and synchronization overhead.
-To reduce that overhead, the implementation captures the single-program copy, reset, kernel, and result-copy sequence in a CUDA Graph and replays the graph for subsequent candidates~\cite{nvidiacuda}.
-Pinned host buffers allow the graph to use asynchronous transfers, and device allocations grow by capacity rather than being recreated for each expression length.
-
-\subsection{Batched GPU Evaluation}
-
-Algorithm~\ref{alg:batch-gom} instead advances a population batch through each FOS step before committing its completed offspring to the donor population.
-The batched backend collects candidates from a population batch, serializes them into a shared token buffer, evaluates them in one grid, and then applies accept--reject decisions.
-The batch size controls the number of simultaneously evaluated programs.
-Larger batches amortize launch and synchronization costs and expose more blocks to the GPU.
-They also increase the delay before accepted changes become visible.
-Consequently, batch size is both a performance parameter and a search hyperparameter.
-The requested GOM batch size is an upper bound; the actual GOM launch size can be smaller when fewer meaningful candidates are available.
-Reported actual GOM batch sizes exclude the one initial population-evaluation launch.
-
-\subsection{Engineering Optimizations}
-
-Several optimizations are shared by the GPU backends:
-
-\begin{itemize}
-  \item Numeric arrays use single precision. This reduces memory traffic. It also enables native floating-point atomics.
-  \item Host token, length, and result buffers are pinned and reused; device program and reduction buffers are capacity-managed.
-  \item Exact evaluation replays a CUDA Graph instead of issuing the same sequence of API calls for every candidate.
-  \item Serialization vectors reserve capacity and are reused across candidates.
-  \item The batched GOM path caches population subtree vectors and updates only entries whose individuals are replaced.
-  \item The sample dimension uses multiple blocks when necessary, increasing available parallel work for larger datasets.
-\end{itemize}
-
-A persistent-kernel design was also evaluated during development, but it performed worse for this workload because queue management and synchronization overhead outweighed the saved launches.
-It was not retained in the final implementation.
-
-\section{Experimental Methodology}
-
-\subsection{Research Questions}
-
-We evaluate four questions:
-
-\begin{description}
-  \item[RQ1.] At what data and population sizes does exact GPU evaluation become faster than the original CPU path?
-  \item[RQ2.] How does batch size affect wall-clock acceleration and candidate-evaluation throughput?
-  \item[RQ3.] How much does delayed-commit batching change fitness evolution and final model quality?
-  \item[RQ4.] Which implementation bottlenecks and optimization techniques explain the observed behavior?
-\end{description}
-
-\subsection{Hardware and Software}
-
-Experiments were run on an AMD Ryzen 9 7950X CPU with 16 physical cores and 64\,MiB of L3 cache, 61\,GiB of system memory, and two NVIDIA GeForce RTX 4090 GPUs with 24\,GiB of memory each.
-GPU timing runs use at most one process per physical GPU.
-CPU acceleration baselines are run sequentially to avoid contention.
-The CPU baseline uses the release CPU build, and GPU backends use the release CUDA build from the same source tree.
-CUDA code is generated for compute capability 8.9, matching the RTX 4090 devices.
-
-\subsection{Datasets and Search Settings}
-
-Table~\ref{tab:datasets} lists the datasets used in the main experiments.
-The prepared datasets use a fixed seed-0 split with the reference study's 50\% training, 25\% validation, and 25\% test proportions.
-The five reported seeds vary search randomness, not the data split.
-
-\begin{table}[t]
-\centering
-\caption{Prepared symbolic-regression datasets used in the main study.}
-\label{tab:datasets}
-\resizebox{\columnwidth}{!}{\input{generated/table_datasets.tex}}
-\end{table}
-
-All main GPU experiments use the function set $\{+,-,\times,\aq\}$, mean squared error fitness, fixed populations with IMS disabled, coefficient mutation probability 0.1, and five seeds.
-The acceleration suite uses height 3 trees, one generation, population sizes 512--8192, and training-row scales 8, 16, and 32.
-Row scaling duplicates the prepared training rows after splitting.
-It is strictly a throughput stress test and is not used as evidence of improved statistical accuracy.
-
-The fitness-evolution suite uses the unscaled data, population size 1024, tree heights 3, 4, and 5, and 100 generations.
-It compares \cpuoriginal, \exactgpu, and \batchgpu with batch sizes 64, 128, 256, 512, and 1024.
-The generation logger records the current best expression, cumulative evaluations, elapsed time, and move counters.
-Each recorded expression is independently evaluated on the prepared training, validation, and test splits.
-Generation curves therefore show the current training-fitness best expression.
-At the end of a run, the harness reevaluates all archived elites and reports the expression with the lowest validation NMSE, following the reference paper's separation between training, validation, and test use.
-
-\subsection{Metrics and Statistical Analysis}
-
-For a paired CPU and GPU run, wall-clock speedup is
-\begin{equation}
-  S_{\mathrm{wall}} = \frac{t_{\mathrm{CPU}}}{t_{\mathrm{GPU}}},
-\end{equation}
-and throughput ratio is the corresponding ratio of candidate evaluations per second.
-We pair runs by dataset, seed, row scale, tree height, and population size.
-Because batch search may evaluate a different number of candidates, wall-clock speedup and throughput ratio are reported separately.
-Numerical divergence can also change the candidate sequence of \exactgpu, so wall-clock speedup is an end-to-end search measurement rather than a fixed-work kernel microbenchmark.
-
-Fitness distortion is measured relative to \exactgpu under the same generation budget:
-\begin{equation}
-  R_{\mathrm{test}}(b) =
-  \frac{\mathrm{NMSE}_{\mathrm{test}}(\text{batch size } b)}
-       {\mathrm{NMSE}_{\mathrm{test}}(\text{exact GPU})}.
-\end{equation}
-A ratio below one favors batching.
-We report medians and interquartile ranges, paired win/tie/loss counts, bootstrap confidence intervals for medians, and Wilcoxon signed-rank tests with Holm correction.
-With five seeds, statistical results are interpreted as evidence about this implementation rather than a definitive ranking of symbolic-regression algorithms.
-Nsight Systems is used on a representative Wine white row-scale-32, population-4096 case to distinguish launch-bound and kernel-bound behavior; profiling runs are not included in the timing summaries.
-
-\subsection{Reference-Paper Comparison}
-
-The original Paper-G fixed-population results are included as an external reference scale~\cite{virgolin2021improving}.
-We rerun a selected four-dataset subset with height 4, population size 1000, linearly scaled MSE~\cite{keijzer2003linear}, no coefficient mutation, five seeds, and a 60\,s budget.
-We did \emph{not} rerun the full paper matrix, which used 30 repetitions and a 1000\,s budget.
-The selected rerun is therefore not a protocol-equivalent reproduction and is not used to claim superiority over the reference paper.
+The acceleration suite contains \AccelerationRuns{} runs over four datasets
+(Wine white, Tower, Airfoil, Dow chemical), sample scales 8, 16, and 32,
+yielding 4,264--80,000 effective training samples per candidate evaluation,
+population sizes 512, 1024, 2048, 4096, and 8192, height 3, one generation,
+exact GPU, and batch sizes 64, 128, 256, 512, and 1024. Sample scaling repeats
+training samples to stress throughput and is not used for statistical accuracy
+claims. A separate 100-generation fitness suite contains \FitnessRuns{} runs and
+\GenerationRecords{} generation records over four unscaled datasets, tree
+heights 3, 4, and 5, population 1024, and the same batch sizes. We also run a
+selected 20-run subset of the reference paper's fixed-population GP-GOMEA
+setting, denoted \(G\) in that paper; the full 30-repetition, 1000-second
+reference-paper matrix is not rerun.
 
 \section{Results}
 
-\subsection{RQ1: Exact GPU Crossover}
+\subsection{Acceleration and Scaling}
 
-Across the acceleration suite, \exactgpu achieves a median \ExactMedianSpeedup$\times$ wall-clock speedup over \cpuoriginal with a bootstrap 95\% confidence interval of \ExactSpeedupCI$\times$.
-It is faster than CPU in \ExactFasterFraction{} of paired runs and reaches a maximum observed speedup of \ExactMaxSpeedup$\times$.
-The median rises to \ExactXThirtyTwoMedianSpeedup$\times$ at the largest row scale.
+Table~\ref{tab:accel} summarizes the main acceleration suite. Exact GPU
+evaluation is faster than CPU in \ExactFasterFraction{} of paired runs and has
+median speedup \ExactMedianSpeedup$\times$ with 95\% bootstrap confidence
+interval \ExactSpeedupCI$\times$. Batching is consistently faster in this matrix:
+\BestBatchVariant{} reaches median \BestBatchMedianSpeedup$\times$ and maximum
+\BestBatchMaxSpeedup$\times$.
 
 \begin{table}[t]
 \centering
-\caption{Acceleration-suite summary. Ratios are paired against \cpuoriginal.}
-\label{tab:acceleration-summary}
+\caption{Acceleration-suite speedups relative to \cpuoriginal. Each row
+summarizes 300 paired one-generation runs with 4,264--80,000 effective training
+samples per candidate evaluation.}
+\label{tab:accel}
 \resizebox{\columnwidth}{!}{\input{generated/table_acceleration_summary.tex}}
 \end{table}
 
-\begin{figure*}[t]
-\centering
-\begin{subfigure}{0.48\textwidth}
-  \includegraphics[width=\linewidth]{exact_speedup_heatmap.png}
-  \caption{Control-flow exact GPU.}
-\end{subfigure}
-\hfill
-\begin{subfigure}{0.48\textwidth}
-  \includegraphics[width=\linewidth]{batch_speedup_heatmap.png}
-  \caption{Batch GPU with batch size 512.}
-\end{subfigure}
-\caption{Median wall-clock speedup over CPU as training-row scale and population size increase. Values aggregate four datasets and five seeds.}
-\Description{Two heatmaps comparing exact and batched GPU speedup across population sizes and row-scale multipliers.}
-\label{fig:speedup-heatmaps}
-\end{figure*}
-
-Figure~\ref{fig:speedup-heatmaps} shows the crossover mechanism.
-Exact GPU evaluation is most useful when each candidate contains enough sample work to amortize launch and synchronization costs.
-Increasing population size also improves the end-to-end ratio because setup costs are spread across more GOM candidates, although exact evaluation still dispatches candidates individually.
-
 \begin{figure}[t]
 \centering
-\includegraphics[width=\linewidth]{speedup_vs_row_scale.png}
-\caption{Exact-GPU row-scale crossover, with batch size 512 shown for context.}
-\Description{Line plot showing median GPU speedup increasing as the training-row scale grows.}
-\label{fig:row-scale-crossover}
+\includegraphics[width=\columnwidth]{speedup_vs_population_x32.png}
+\caption{Median speedup at sample scale 32, corresponding to 17,056--80,000
+effective training samples per candidate evaluation. Larger populations expose
+more GOM candidates and amortize GPU setup.}
+\label{fig:population}
 \end{figure}
 
-\subsection{RQ2: Batch-Size Scaling}
+Figure~\ref{fig:population} shows the main crossover behavior. Exact GPU
+benefits from larger data and population sizes but remains sensitive to launch
+and synchronization overhead. Batch GPU reaches much higher throughput because a
+single launch carries many candidate programs.
 
-The best median batched result is \BestBatchVariant{} at \BestBatchMedianSpeedup$\times$ over CPU, and batched evaluation reaches a maximum observed speedup of \BestBatchMaxSpeedup$\times$.
-At row scale 32, the median batched speedup across the measured batch sizes is \BatchXThirtyTwoMedianSpeedup$\times$.
-The largest-population cases provide the clearest acceleration, as shown in Table~\ref{tab:headline-acceleration}.
+Table~\ref{tab:batchscale} isolates requested batch size on one large workload.
+The requested size is an upper bound: actual GOM batches are smaller when fewer
+meaningful candidates are available. Once the actual batch reaches tens of
+programs per launch, wall-clock speedup jumps from single digits to roughly
+46--51$\times$ on this case.
 
 \begin{table}[t]
 \centering
-\caption{Headline acceleration at row scale 32 and population size 8192. The best batch is selected per dataset by median wall-clock speedup.}
-\label{tab:headline-acceleration}
-\resizebox{\columnwidth}{!}{\input{generated/table_headline_acceleration.tex}}
-\end{table}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{speedup_vs_population_x32.png}
-\caption{Median wall-clock speedup over CPU at training-row scale 32.}
-\Description{Line plot showing exact and batched GPU speedup as population size increases at row scale 32.}
-\label{fig:speedup-population}
-\end{figure}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{batch_size_scaling.png}
-\caption{Batch-size scaling for Wine white at row scale 32 and population size 4096. Wall-clock and evaluation-throughput ratios are reported separately.}
-\Description{Line plot comparing wall-clock speedup and evaluation-throughput ratio across requested GPU batch sizes.}
-\label{fig:batch-scaling}
-\end{figure}
-
-\begin{table}[t]
-\centering
-\caption{Batch-size scaling for Wine white at row scale 32 and population size 4096. Ratios are paired against \cpuoriginal.}
-\label{tab:batch-scaling}
+\caption{Batch-size scaling on Wine white, sample scale 32, population 4096.
+This setting evaluates 78,368 effective training samples per candidate.}
+\label{tab:batchscale}
 \resizebox{\columnwidth}{!}{\input{generated/table_batch_scaling.tex}}
 \end{table}
 
-Figure~\ref{fig:batch-scaling} illustrates diminishing returns from increasing batch size.
-Small batches do not provide enough simultaneously active programs, while larger batches better amortize fixed costs.
-The optimum is not guaranteed to be the largest batch: the number of meaningful candidates, token lengths, and population-update delays all interact with the requested batch size.
+\subsection{Profiling and Bottleneck Explanation}
 
-\subsection{RQ3: Fitness Evolution and Batch Distortion}
-
-\exactgpu and \cpuoriginal are close in final quality: the median exact-GPU test-NMSE ratio relative to CPU is \ExactFitnessMedianRatioVsCPU{}.
-This supports the use of \exactgpu as a practical control-flow baseline, while also confirming that device arithmetic and reduction order can change trajectories.
-
-\begin{figure*}[t]
-\centering
-\includegraphics[width=0.92\textwidth]{fitness_evolution_by_generation.png}
-\caption{Median best test NMSE over 100 generations for height 4 on the configured fitness-evolution datasets. Curves use unscaled datasets and five seeds.}
-\Description{Multi-panel line plot of best test NMSE across generations for CPU, exact GPU, and batched GPU variants.}
-\label{fig:fitness-generation}
-\end{figure*}
-
-\begin{figure*}[t]
-\centering
-\includegraphics[width=0.92\textwidth]{fitness_evolution_by_time.png}
-\caption{Median best test NMSE against median elapsed evolution time for height 4 on the configured fitness-evolution datasets. Logarithmic axes expose both early progress and longer exact runs.}
-\Description{Multi-panel line plot of best test NMSE against elapsed time for CPU, exact GPU, and batched GPU variants.}
-\label{fig:fitness-time}
-\end{figure*}
-
-Figure~\ref{fig:fitness-generation} shows that batch size changes evolution rather than merely changing runtime.
-Some batched configurations improve quickly because they evaluate candidates efficiently, while others follow a worse trajectory because accepted changes become visible later.
-Figure~\ref{fig:fitness-time} shows the corresponding time-to-quality view, where batched methods can reach useful models earlier even when their final generation-matched error is not best.
-Table~\ref{tab:fitness-distortion} summarizes the final paired effect.
-The batch size whose median test ratio is closest to exact is \BestFidelityBatch{} with ratio \BestFidelityRatio{}, while the largest median deviation occurs at batch size \WorstFidelityBatch{} with ratio \WorstFidelityRatio{}.
-After Holm correction, \SignificantDistortionBatchCount{} of the five batch sizes show a significant paired final test-NMSE difference from \exactgpu at the 0.05 level.
+Nsight Systems profiling on Wine white sample scale 32, population 4096, height
+3, seed 0 evaluates 78,368 effective training samples per candidate and exposes
+the root cause. Table~\ref{tab:profile} shows that exact GPU uses
+about one candidate per effective CUDA Graph launch, causing CUDA API time to
+dominate. Batch GPU evaluates hundreds of programs per launch, reducing host API
+time per candidate even though total kernel time is higher.
 
 \begin{table}[t]
 \centering
-\caption{Final batch distortion relative to \exactgpu after 100 generations. Lower test ratios are better; W/T/L counts batch wins, ties, and losses.}
-\label{tab:fitness-distortion}
-\resizebox{\columnwidth}{!}{\input{generated/table_fitness_distortion.tex}}
-\end{table}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{batch_fitness_distortion.png}
-\caption{Median final test-NMSE ratio relative to exact GPU, with interquartile range across paired runs.}
-\Description{Error-bar plot showing final test-NMSE ratio of each requested batch size relative to exact GPU.}
-\label{fig:batch-distortion}
-\end{figure}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{quality_speed_tradeoff.png}
-\caption{Quality--speed tradeoff by batch size. Labels show the requested GPU batch size.}
-\Description{Scatter plot relating median speedup to final test-NMSE ratio for each GPU batch size.}
-\label{fig:quality-speed}
-\end{figure}
-
-The key result is that distortion is non-monotonic.
-More throughput does not guarantee lower error under a fixed generation budget, because batching modifies the search path.
-\batchgpu should therefore be presented and tuned as a separate approximate \gpgomea variant.
-
-\begin{table}[t]
-\centering
-\caption{Median cumulative GOM behavior after 100 generations. Acceptance is computed over meaningful evaluated moves.}
-\label{tab:gom-behavior}
-\resizebox{\columnwidth}{!}{\input{generated/table_gom_behavior.tex}}
-\end{table}
-
-The cumulative behavior in Table~\ref{tab:gom-behavior} provides a mechanism-level view of the distortion.
-Batching changes which candidates are meaningful and which moves are accepted because donors and candidate states are observed at different times.
-
-\subsection{RQ4: Bottlenecks and Optimization Effects}
-
-Profiling and implementation experiments identify two distinct regimes.
-The exact path is dominated by repeated host--device orchestration and synchronization for small candidate programs.
-CUDA Graph replay, pinned reusable buffers, and single-precision reductions directly target this regime.
-The batched path is less launch-bound and benefits more from enough independent programs, reduced serialization allocation, cached subtree vectors, and higher sample-level occupancy.
-In a representative Wine white row-scale-32, population-4096 comparison against pre-optimization commit \texttt{851b0e9}, the cumulative changes improve exact-GPU wall time by \ExactOptimizationSpeedup$\times$ and batch-GPU wall time by \BatchOptimizationSpeedup$\times$ (Table~\ref{tab:optimization-ablation}).
-Both binaries are built for compute capability 8.9.
-This is a cumulative engineering ablation; it does not assign an independent speedup to each technique.
-
-\begin{table}[t]
-\centering
-\caption{Nsight Systems summary for representative one-generation Wine white row-scale-32, population-4096 runs. Batch GPU uses requested batch size 512. Launches count CUDA Graph launches for exact GPU and direct kernel launches for batch GPU. CUDA API time is the sum of traced CUDA API call durations.}
-\label{tab:profiling}
+\caption{Representative Nsight Systems profile.}
+\label{tab:profile}
 \resizebox{\columnwidth}{!}{\input{generated/table_profiling.tex}}
 \end{table}
 
-Table~\ref{tab:profiling} makes the granularity difference explicit.
-The exact path remains close to one program per effective CUDA Graph launch, whereas the batched path evaluates hundreds of programs per direct kernel launch in the representative case.
-Batching therefore reduces both the number of launches and the amount of host-side CUDA API work per evaluated candidate.
+A before--after ablation on the representative workload shows that these
+engineering changes reduce exact-GPU wall time by \ExactOptimizationSpeedup$\times$
+and batch-GPU wall time by \BatchOptimizationSpeedup$\times$, confirming that
+launch amortization and buffer reuse are the main optimization targets.
+
+\subsection{Fitness Distortion}
+
+Batching changes the search trajectory because donor visibility is delayed, so
+speed alone is insufficient. Table~\ref{tab:distortion} compares final test NMSE
+after 100 generations against exact GPU. No batch size shows a significant
+paired final test-NMSE difference after Holm correction at the 0.05 level in this
+subset. However, the median ratios are not identical, and the win/loss counts
+confirm that batching is an algorithmic variant rather than a transparent
+implementation optimization.
+Figure~\ref{fig:fitness} visualizes the same point over generations: quality is
+often close by the end, but the methods follow different search paths.
 
 \begin{table}[t]
 \centering
-\caption{Cumulative optimization ablation on Wine white, row scale 32, height 3, population 4096, and five seeds.}
-\label{tab:optimization-ablation}
-\resizebox{\columnwidth}{!}{\input{generated/table_optimization_ablation.tex}}
+\caption{Final batch distortion relative to exact GPU. Lower test ratio is better.}
+\label{tab:distortion}
+\resizebox{\columnwidth}{!}{\input{generated/table_fitness_distortion.tex}}
 \end{table}
 
-Tree shape does not create the usual within-warp interpreter divergence because one block evaluates one program and its threads process different samples.
-The remaining structural imbalance occurs across blocks with different program lengths, which the GPU scheduler can overlap.
-This design choice is more important than attempting to make one warp evaluate unrelated trees.
-
-\subsection{Selected Paper-G Reference}
-
-Table~\ref{tab:paper-g} compares the selected local Paper-G rerun with the original reported values.
-The table is included to anchor the implementation in the reference research topic, not to claim reproduction.
-Only \PaperGLocalRuns{} local runs are represented, and the local time budget and repetition count are substantially smaller than those of the paper.
-
-\begin{table}[t]
+\begin{figure*}[t]
 \centering
-\caption{Selected Paper-G comparison. Values are $100\times$ NMSE; lower is better.}
-\label{tab:paper-g}
-\resizebox{\columnwidth}{!}{\input{generated/table_paper_g.tex}}
-\end{table}
+\includegraphics[width=0.85\textwidth]{fitness_evolution_by_generation.png}
+\caption{Median best test NMSE over 100 generations for height 4. Batched
+variants can reach useful quality quickly, but do not trace the same trajectory
+as exact GOM.}
+\label{fig:fitness}
+\end{figure*}
 
-\section{Discussion}
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{quality_speed_tradeoff.png}
+\caption{Batch size trades throughput against generation-matched quality.}
+\label{fig:quality}
+\end{figure}
 
-The results show that GPU acceleration is not a single yes-or-no property of GP fitness evaluation.
-For small datasets and fine-grained exact GOM moves, CPU evaluation can remain competitive because it avoids launch and synchronization overhead.
-As the number of fitness cases grows, exact GPU evaluation crosses over and becomes consistently useful.
-Batching broadens the useful region by creating program-level parallelism, but changes the algorithm.
+\section{Discussion and Analysis}
 
-This distinction matters for scientific claims.
-\exactgpu is suitable when preserving GOM's immediate decision structure is more important than bitwise numerical identity.
-\batchgpu is suitable when throughput is the priority and batch size can be treated as a hyperparameter.
-Reporting only evaluation throughput would obscure the fact that candidate counts and trajectories differ; reporting only final error would obscure the substantial computational benefit.
-Both dimensions are necessary.
+The results support three conclusions relevant to parallel programming. First,
+fitness evaluation is not automatically GPU-friendly. The arithmetic work is
+parallel, but exact GOM exposes it in very small sequential pieces. CUDA Graphs
+and pinned buffers reduce overhead, yet exact speedup depends on enough training
+samples and enough candidates to amortize each decision. This explains why exact
+GPU reaches higher speedup at sample scale 32 but is not always dominant on
+small cases.
 
-\section{Threats to Validity}
+Second, batching is the main source of throughput because it increases both
+sample-level and program-level parallelism. The selected block mapping addresses
+tree-induced warp divergence by keeping one tree per block: lanes in a warp
+execute the same postfix operations over different samples. Different tree
+shapes become inter-block imbalance rather than intra-warp branch divergence.
+The profiling result of 334 programs per launch for batch GPU versus roughly one
+program per launch for exact GPU is the most direct evidence.
 
-The throughput suite uses duplicated training rows to reveal scaling behavior.
-These rows do not add information and cannot support accuracy claims.
-The fitness study uses four datasets, three tree heights, and five seeds; broader conclusions require more datasets and repetitions.
-Device math and parallel reduction ordering make \exactgpu a non-bitwise reproduction of CPU arithmetic.
-The batched backend deliberately delays update visibility and is not semantically equivalent to exact GOM.
+Third, batching has a scientific cost. Delayed commits change which donors are
+visible and therefore change the sequence of accepted GOM moves. This is why the
+paper reports both speedup and final fitness distortion. For this experiment,
+batching provides large speedups without a statistically significant final
+quality loss, but this should not be generalized without the full paper matrix,
+more repetitions, and additional datasets.
 
-The full experiment matrix from the reference paper was not rerun.
-The selected Paper-G comparison uses a shorter budget and fewer repetitions, and the main GPU fitness study uses a generation budget, MSE, and coefficient mutation.
-The local harness also holds the prepared data split fixed across search seeds, which is another difference from a full repeated-split reproduction.
-We therefore avoid direct algorithm-ranking claims against the original paper.
-Finally, results are hardware-dependent: the balance between CPU scalar performance, GPU launch latency, memory bandwidth, and occupancy will differ on other systems.
+The main limitations are scope and hardware dependence. Sample scaling increases
+per-candidate work for throughput stress tests but does not add new statistical
+information. The selected \(G\)-setting rerun is only an external reference
+check, not a protocol-equivalent reproduction of the reference paper's full
+30-repetition, 1000-second matrix. Finally, the crossover point between CPU,
+exact GPU, and batched GPU depends on GPU launch latency, memory bandwidth, CPU
+scalar performance, and available population-level parallelism.
 
 \section{Conclusion}
 
-We presented exact and batched GPU fitness-evaluation backends for \gpgomea symbolic regression.
-The implementation linearizes expression trees into postfix programs, maps one program to a CUDA block to control warp divergence, and reduces orchestration and allocation overhead through CUDA Graph replay, reusable pinned buffers, single-precision evaluation, and host-side caches.
-Exact GPU evaluation becomes advantageous when candidates contain enough sample work, while batched evaluation provides larger speedups by exposing program-level parallelism.
-The batched method also changes fitness evolution, so its acceleration must be interpreted together with its search distortion.
-Future work should evaluate the full reference-paper matrix, study adaptive batch sizing, and investigate mixed-precision acceptance checks that preserve more CPU decisions without sacrificing GPU throughput.
+This project parallelizes \gpgomea symbolic-regression fitness evaluation with
+two CUDA execution modes. Exact GPU evaluation preserves GOM update semantics and
+achieves a median \ExactMedianSpeedup$\times$ speedup on the scaling study.
+Batched GPU evaluation exposes much more parallel work and reaches median
+\BestBatchMedianSpeedup$\times$ speedup, but it is an approximate delayed-commit
+algorithm. The key lesson is that parallelizing an evolutionary algorithm
+requires reporting both hardware efficiency and algorithmic distortion: the
+fastest implementation is not necessarily the same algorithm.
 
-\bibliographystyle{ACM-Reference-Format}
+\bibliographystyle{IEEEtran}
 \bibliography{references}
+
+\xdef\mainbodyendpage{\thepage}
 
 \end{document}
