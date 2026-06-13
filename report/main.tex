@@ -29,12 +29,13 @@
 }
 
 \begin{document}
+\bstctlcite{IEEEexample:BSTcontrol}
 
 \title{Parallelizing GP-GOMEA Symbolic Regression with Exact and Batched GPU Fitness Evaluation\\
 {\footnotesize Final Project --- Parallel Programming, Spring 2026}}
 
 \author{%
-\IEEEauthorblockN{Anonymous Author(s)}
+\IEEEauthorblockN{Shao Chi Huang, Hao Chun Fu, and Po Hsuan Lai}
 \IEEEauthorblockA{Parallel Programming Final Project}}
 
 \maketitle
@@ -119,13 +120,17 @@ algorithmic cost of batching.
 
 \subsection{GPU Genetic Programming}
 
-GPU GP systems commonly exploit data-parallel fitness evaluation using
-linearized programs or interpreters~\cite{langdon2008simd}. Our workload is
-finer-grained than conventional generational GP: candidate programs are small,
-meaningful candidates appear throughout GOM, and exact accept--reject decisions
-are sequential. The core question is therefore not simply ``can fitness run on a
-GPU?'' but where exact GPU evaluation becomes worthwhile, and how much search
-distortion is traded for throughput when candidate evaluations are batched.
+GPU GP systems commonly exploit data-parallel fitness evaluation using compiled
+GPU programs, linearized programs, or interpreters~\cite{harding2007fast,langdon2008simd,langdon2010many}.
+Later comparisons of kernel-per-individual, kernel-per-generation, and
+interpreter designs show that no mapping is universally best because compilation,
+launch, and execution overheads trade off differently~\cite{kim2017gpgpgpu}. Our
+workload is finer-grained than conventional generational GP: candidate programs
+are small, meaningful candidates appear throughout GOM, and exact accept--reject
+decisions are sequential. The core question is therefore not simply ``can
+fitness run on a GPU?'' but where exact GPU evaluation becomes worthwhile, and
+how much search distortion is traded for throughput when candidate evaluations
+are batched.
 
 \section{Methodology}
 
@@ -215,14 +220,20 @@ the batch finishes.
 
 \subsection{Optimization Techniques}
 
-The exact path is launch-bound, so it uses CUDA Graph replay for the repeated
-copy--clear--kernel--copy sequence, pinned host buffers, capacity-managed device
-buffers, and single-precision device arrays. The batch path uses the same token
-format but increases program-level parallelism by evaluating up to the requested
-batch size of meaningful candidates per launch. Host-side subtree vectors and
-serialization buffers are cached to reduce per-candidate allocation. A persistent
-kernel was tested during development but rejected because queue management and
-synchronization overhead outweighed launch savings for this workload.
+The optimizations target three bottlenecks. First, tree objects are converted to
+compact postfix token programs before reaching CUDA. This removes host pointers
+and virtual dispatch from device execution and lets each kernel interpret a
+contiguous opcode stream. Second, the exact path is launch-bound, so it captures
+the repeated copy--clear--kernel--copy sequence with CUDA Graph replay~\cite{nvidiacuda}, uses
+pinned host buffers for transfers, keeps capacity-managed device buffers across
+evaluations, and stores training data in single precision on the device. These
+choices reduce per-candidate API, transfer, and allocation overhead while
+preserving immediate GOM decisions. Third, the batch path uses a fixed-stride
+token matrix with per-program lengths so many meaningful candidates can be
+evaluated by one grid launch. Reused subtree vectors and serialization buffers
+reduce host-side allocation during candidate collection. A persistent-kernel
+prototype was tested but rejected because queue management and synchronization
+overhead outweighed launch savings for this workload.
 
 \section{Experimental Setup}
 
@@ -253,6 +264,13 @@ heights 3, 4, and 5, population 1024, and the same batch sizes. We also run a
 selected 20-run subset of the reference paper's fixed-population GP-GOMEA
 setting, denoted \(G\) in that paper; the full 30-repetition, 1000-second
 reference-paper matrix is not rerun.
+
+To test the kernel-mapping assumption directly, we also run a synthetic CUDA
+ablation outside the GOM loop. It compares the production-style
+one-program-per-block mapping against a lane-mixed kernel where lanes in a warp
+interpret different programs. Both evaluate 1,024 postfix programs over 32,768
+samples; the heterogeneous case varies program length among 7, 15, 23, and 31
+tokens and reports active token-samples per second.
 
 \section{Results}
 
@@ -318,6 +336,13 @@ time per candidate even though total kernel time is higher.
 \resizebox{\columnwidth}{!}{\input{generated/table_profiling.tex}}
 \end{table}
 
+The synthetic mapping ablation gives a separate check on warp-level control
+flow. With variable-length programs, median active token-sample throughput over
+ten repeats is 0.97$\times$ the uniform-length case under one-program-per-block
+mapping, but only 0.60$\times$ under lane-mixed mapping. This supports the
+choice to keep one expression tree inside a block rather than mixing unrelated
+trees within a warp.
+
 A before--after ablation on the representative workload shows that these
 engineering changes reduce exact-GPU wall time by \ExactOptimizationSpeedup$\times$
 and batch-GPU wall time by \BatchOptimizationSpeedup$\times$, confirming that
@@ -342,16 +367,16 @@ often close by the end, but the methods follow different search paths.
 \resizebox{\columnwidth}{!}{\input{generated/table_fitness_distortion.tex}}
 \end{table}
 
-\begin{figure*}[t]
+\begin{figure}[!t]
 \centering
-\includegraphics[width=0.85\textwidth]{fitness_evolution_by_generation.png}
+\includegraphics[width=\columnwidth]{fitness_evolution_by_generation.png}
 \caption{Median best test NMSE over 100 generations for height 4. Batched
 variants can reach useful quality quickly, but do not trace the same trajectory
 as exact GOM.}
 \label{fig:fitness}
-\end{figure*}
+\end{figure}
 
-\begin{figure}[t]
+\begin{figure}[!t]
 \centering
 \includegraphics[width=\columnwidth]{quality_speed_tradeoff.png}
 \caption{Batch size trades throughput against generation-matched quality.}
@@ -372,9 +397,10 @@ Second, batching is the main source of throughput because it increases both
 sample-level and program-level parallelism. The selected block mapping addresses
 tree-induced warp divergence by keeping one tree per block: lanes in a warp
 execute the same postfix operations over different samples. Different tree
-shapes become inter-block imbalance rather than intra-warp branch divergence.
-The profiling result of 334 programs per launch for batch GPU versus roughly one
-program per launch for exact GPU is the most direct evidence.
+shapes become inter-block imbalance rather than intra-warp branch divergence,
+which matches the mapping ablation reported above. The profiling result of 334
+programs per launch for batch GPU versus roughly one program per launch for
+exact GPU is the most direct evidence for launch amortization.
 
 Third, batching has a scientific cost. Delayed commits change which donors are
 visible and therefore change the sequence of accepted GOM moves. This is why the
